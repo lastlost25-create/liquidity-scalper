@@ -9,17 +9,16 @@ No indicators anywhere — no EMA, RSI, ATR. Only raw candle structure.
 ## How it stays live and free (no server, no API key)
 
 Everything runs **in the visitor's browser**:
-- **Feed:** Binance public market data (`data-api.binance.vision` REST for history,
-  `data-stream.binance.vision` websocket for tick-live M1 candles). No key, no account.
-  If the websocket is blocked on a network, the page falls back to REST polling every 15s.
+- **Feed (primary): Yahoo Finance `XAUUSD=X`** — spot composite that tracks Exness/OANDA
+  within ~$1. REST history (1m/1h; 4h resampled client-side) + 20-second polling.
+  No key, no account.
+- **Feed (automatic fallback): Binance `PAXGUSDT`** public feed
+  (`data-api.binance.vision` REST + `data-stream.binance.vision` websocket tick-live).
+  Used only if Yahoo blocks the request (it rate-limits some networks); the page
+  labels which feed is active. If the websocket is blocked, REST polling every 15s.
 - **Engine:** `docs/engine.js` — a JavaScript port of `engine/engine.py`, verified to
   produce **bit-identical signals** (14/14 match on 5 test dates of Twelve Data XAUUSD).
-- **Symbol note:** the live feed is **PAXGUSDT** (PAX Gold), which tracks XAUUSD spot
-  within a few dollars. All levels, sweeps, entries, stops and targets are computed
-  from this one feed, so every signal is internally consistent — but quotes can differ
-  slightly from your broker's XAUUSD. Demo-test before real money.
-- The old GitHub Actions 5-minute updater is retired (its cron is disabled);
-  `docs/signals.json` remains only as a legacy artifact.
+- Weekend: gold market closed Sat/Sun UTC → page shows CLOSED, no signals.
 
 ---
 
