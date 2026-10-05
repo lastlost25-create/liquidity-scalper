@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a SAMPLE signals.json from the smoke-test data so site/index.html
+"""Build a SAMPLE signals.json from the smoke-test data so docs/index.html
 renders real engine output. Overwritten by the GitHub Action once a
 TWELVEDATA_API_KEY is configured. Clearly labeled as sample."""
 import json
