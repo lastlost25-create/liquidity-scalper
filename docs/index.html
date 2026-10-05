@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Liquidity Scalper · XAUUSD</title>
+<title>Liquidity Scalper · PAXG Live</title>
 <style>
   :root{--bg:#0a0e14;--card:#11161f;--line:#1e2634;--txt:#e6eaf2;--dim:#8b94a7;
     --green:#22c55e;--red:#ef4444;--gold:#d4a93c;--blue:#3b82f6}
@@ -11,21 +11,20 @@
   html,body{height:100%}
   body{background:var(--bg);color:var(--txt);font-family:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;
     display:flex;flex-direction:column;overflow:hidden;-webkit-font-smoothing:antialiased}
-  /* ── top bar ─────────────────────────────── */
-  #topbar{display:flex;align-items:center;gap:10px;padding:8px 12px;
+  #topbar{display:flex;align-items:center;gap:8px;padding:8px 12px;
     background:var(--card);border-bottom:1px solid var(--line);flex:0 0 auto;z-index:20}
   #topbar h1{font-size:15px;letter-spacing:.5px;white-space:nowrap}
   #topbar h1 span{color:var(--gold)}
   #topbar .sym{font-size:11px;color:var(--dim);white-space:nowrap}
   #price{font-size:22px;font-weight:800;font-family:ui-monospace,Menlo,monospace;
     margin-left:auto;white-space:nowrap}
+  #price.tick-up{color:var(--green)} #price.tick-dn{color:var(--red)}
   .badge{font-size:10px;padding:3px 9px;border-radius:20px;background:var(--bg);
     border:1px solid var(--line);color:var(--dim);white-space:nowrap}
   .badge.on{color:var(--green);border-color:var(--green)}
   .badge.up{color:var(--green);border-color:var(--green)}
   .badge.dn{color:var(--red);border-color:var(--red)}
-  .badge.sample{color:var(--gold);border-color:var(--gold)}
-  /* ── stage: full-screen chart + floating panels ── */
+  .badge.warn{color:var(--gold);border-color:var(--gold)}
   #stage{position:relative;flex:1 1 auto;min-height:0}
   #chartWrap{position:absolute;inset:0}
   #chart{position:absolute;inset:0}
@@ -34,7 +33,6 @@
     font-size:12px;box-shadow:0 4px 18px rgba(0,0,0,.45)}
   .panel h2{font-size:10px;color:var(--dim);text-transform:uppercase;
     letter-spacing:1px;margin-bottom:8px}
-  /* verdict panel — top left */
   #signalPanel{top:10px;left:10px;max-width:305px}
   #vtext{font-size:30px;font-weight:800;letter-spacing:2px}
   #signalPanel.WAIT #vtext{color:var(--dim)}
@@ -47,7 +45,6 @@
   .plan b{font-size:15px;font-family:ui-monospace,Menlo,monospace}
   #pSL{color:var(--red)} #pTP{color:var(--green)} #pEntry{color:var(--blue)}
   #reason{font-size:11px;color:var(--gold);line-height:1.45;margin-top:4px}
-  /* pools panel — top right */
   #poolPanel{top:10px;right:10px;width:212px;max-height:46%;overflow-y:auto}
   .pool{display:flex;justify-content:space-between;align-items:center;
     padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}
@@ -57,7 +54,6 @@
     border:1px solid var(--line);color:var(--dim);margin-left:4px;white-space:nowrap}
   .tag.prem{color:var(--gold);border-color:var(--gold)}
   .dist{color:var(--dim);font-family:ui-monospace,Menlo,monospace;font-size:10px}
-  /* log panel — bottom left */
   #logPanel{left:10px;bottom:10px;max-width:340px;max-height:38%;overflow-y:auto}
   #logPanel table{width:100%;border-collapse:collapse;font-size:11px}
   #logPanel th{color:var(--dim);text-align:left;padding:4px;font-weight:500;font-size:10px}
@@ -67,9 +63,11 @@
   .win{color:var(--green)}.loss{color:var(--red)}
   .empty{color:var(--dim);font-size:11px;text-align:center;padding:8px}
   #ctx{font-size:10px;color:var(--dim);margin-top:6px;line-height:1.5}
-  /* footer strip */
   #foot{flex:0 0 auto;font-size:10px;color:var(--dim);text-align:center;
     padding:5px 8px;border-top:1px solid var(--line);background:var(--card);z-index:20}
+  #err{position:absolute;top:56px;left:50%;transform:translateX(-50%);z-index:30;
+    background:rgba(60,20,20,.95);border:1px solid var(--red);border-radius:10px;
+    padding:10px 16px;font-size:12px;display:none;max-width:92%}
   @media (max-width:700px){
     #signalPanel{max-width:238px;padding:8px 10px}
     #vtext{font-size:24px}
@@ -85,9 +83,8 @@
 
 <div id="topbar">
   <h1>⚡ LIQUIDITY <span>SCALPER</span></h1>
-  <span class="sym">XAUUSD · M1</span>
+  <span class="sym">PAXG · 1m ≈ XAUUSD</span>
   <span class="badge" id="fresh">···</span>
-  <span class="badge sample" id="sampleBadge" style="display:none">SAMPLE</span>
   <div id="price">–</div>
   <span class="badge" id="trend">H1 ···</span>
   <span class="badge" id="session">···</span>
@@ -95,11 +92,12 @@
 
 <div id="stage">
   <div id="chartWrap"><canvas id="chart"></canvas></div>
+  <div id="err"></div>
 
   <div class="panel WAIT" id="signalPanel">
     <h2>Signal</h2>
     <div id="vtext">WAIT</div>
-    <div id="vsub">loading…</div>
+    <div id="vsub">connecting…</div>
     <div class="plan" id="plan" style="display:none">
       <div><small>ENTRY</small><b id="pEntry">–</b></div>
       <div><small>STOP LOSS</small><b id="pSL">–</b></div>
@@ -126,112 +124,164 @@
   </div>
 </div>
 
-<div id="foot">⚠️ Educational only — not financial advice · closed candles, no repaint, no indicators ·
-  <span id="updated">–</span></div>
+<div id="foot">⚠️ Educational only — not financial advice · PAXG tracks XAUUSD within a few $ ·
+  tick-live via Binance public feed · <span id="updated">connecting…</span></div>
 
+<script src="engine.js"></script>
 <script>
+'use strict';
+/* Live client-side Liquidity Scalper.
+ * Feed: Binance public market data (data-api.binance.vision REST +
+ * data-stream.binance.vision websocket). No API key, no account, no server.
+ * Engine: engine.js — bit-for-bit port of the Python engine (verified:
+ * 14/14 identical signals on 5 test dates). Closed candles only, no repaint. */
+const API = 'https://data-api.binance.vision';
+const WS_URL = 'wss://data-stream.binance.vision/ws/paxgusdt@kline_1m';
 const PKT = 'Asia/Karachi';
-const fmtT = iso => new Date(iso).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:PKT});
-const fmtD = iso => new Date(iso).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:PKT});
-let DATA = null;
+const FRESH_MIN = 120;               // active-signal recency, like the Python engine
 
-/* ── panels ─────────────────────────────────── */
+let M1 = [], H1 = [], H4 = [];       // M1 includes the forming candle last
+let pools = [], signalsToday = [];
+let ws = null, wsFails = 0, pollTimer = null, lastPrice = 0;
+
+const $ = id => document.getElementById(id);
+const fmtT = ms => new Date(ms).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:PKT});
+const fmtD = ms => new Date(ms).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:PKT});
+
+function err(msg){
+  const e = $('err');
+  e.textContent = msg; e.style.display = 'block';
+  clearTimeout(err._t); err._t = setTimeout(() => e.style.display = 'none', 8000);
+}
+
+/* ---------------- data ---------------- */
+async function klines(interval, limit){
+  const r = await fetch(`${API}/api/v3/klines?symbol=PAXGUSDT&interval=${interval}&limit=${limit}`);
+  if(!r.ok) throw new Error('feed HTTP ' + r.status);
+  const d = await r.json();
+  return d.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] }));
+}
+const closedM1 = () => M1.slice(0, -1);
+
+/* ---------------- engine ---------------- */
+function recompute(){
+  const nowMs = Date.now();
+  if(M1.length < 10 || H1.length < 10 || H4.length < 10) return;
+  const m1c = LS.closed_only(M1, nowMs);
+  const h1c = LS.closed_only(H1, nowMs);
+  const h4c = LS.closed_only(H4, nowMs);
+  pools = LS.detect_pools(h1c, h4c, nowMs);
+  const { signals } = LS.build_signals(m1c, pools, h1c, nowMs);
+  signalsToday = signals.map(s => {
+    const after = m1c.filter(b => b.t > Date.parse(s.signal_at));
+    return after.length ? Object.assign({}, s, LS.track_outcome(s, after))
+                        : Object.assign({}, s, { outcome: null, r: null });
+  });
+  render(nowMs, m1c, h1c, h4c);
+}
+
+function activeSignal(nowMs){
+  const cutoff = nowMs - FRESH_MIN * 60000;
+  const fresh = signalsToday.filter(s => Date.parse(s.signal_at) >= cutoff);
+  return fresh.length ? fresh[0] : null;
+}
+
+/* ---------------- panels ---------------- */
 function poolRow(p){
   return `<div class="pool"><span class="p">${p.price.toFixed(2)}</span>`
     + `<span><span class="tag">${p.tf}</span><span class="tag ${p.premium?'prem':''}">${p.premium?'★':'pool'}</span></span>`
     + `<span class="dist">$${p.distance.toFixed(2)}</span></div>`;
 }
-function renderPanels(d){
-  const sp = document.getElementById('signalPanel');
-  sp.className = 'panel ' + d.verdict;
-  document.getElementById('vtext').textContent = d.verdict;
-  document.getElementById('price').textContent =
-    '$' + d.price.toLocaleString('en-US',{minimumFractionDigits:2});
-  document.getElementById('sampleBadge').style.display = d.sample ? '' : 'none';
 
-  const sb = document.getElementById('session');
-  if(d.session_active){ sb.textContent = '● ' + d.session; sb.classList.add('on'); }
-  else { sb.textContent = '○ OFF'; sb.classList.remove('on'); }
-  const tb = document.getElementById('trend');
-  tb.textContent = 'H1 ' + (d.trend_h1 || '···');
-  tb.classList.remove('up','dn');
-  if(d.trend_h1 === 'UPTREND') tb.classList.add('up');
-  else if(d.trend_h1 === 'DOWNTREND') tb.classList.add('dn');
+function renderPanels(nowMs, h1c, h4c){
+  const price = M1.length ? M1[M1.length-1].c : 0;
+  const pe = $('price');
+  pe.textContent = '$' + price.toLocaleString('en-US',{minimumFractionDigits:2});
+  pe.classList.remove('tick-up','tick-dn');
+  if(price > lastPrice) pe.classList.add('tick-up');
+  else if(price < lastPrice) pe.classList.add('tick-dn');
+  lastPrice = price;
 
-  const s = d.active_signal, plan = document.getElementById('plan');
-  if(s){
+  const act = activeSignal(nowMs);
+  const sp = $('signalPanel');
+  const verdict = act ? act.direction : 'WAIT';
+  sp.className = 'panel ' + verdict;
+  $('vtext').textContent = verdict;
+  const plan = $('plan');
+  if(act){
     plan.style.display = 'grid';
-    document.getElementById('pEntry').textContent = s.entry.toFixed(2);
-    document.getElementById('pSL').textContent = s.sl.toFixed(2);
-    document.getElementById('pTP').textContent = s.tp.toFixed(2);
-    document.getElementById('pRR').textContent = '1:' + s.rr.toFixed(2);
-    document.getElementById('vsub').textContent =
-      s.direction + ' · swept ' + fmtT(s.swept_at) + ' PKT · ' + s.session;
-    document.getElementById('reason').textContent = '💧 ' + s.reason;
+    $('pEntry').textContent = act.entry.toFixed(2);
+    $('pSL').textContent = act.sl.toFixed(2);
+    $('pTP').textContent = act.tp.toFixed(2);
+    $('pRR').textContent = '1:' + act.rr.toFixed(2);
+    $('vsub').textContent = act.direction + ' · swept ' + fmtT(Date.parse(act.swept_at)) + ' PKT · ' + act.session;
+    $('reason').textContent = '💧 ' + act.reason;
   } else {
     plan.style.display = 'none';
-    document.getElementById('vsub').textContent = d.session_active
-      ? 'in killzone — strict filters active' : 'outside killzones — no signals';
-    document.getElementById('reason').textContent = d.wait_reason ? '⏳ ' + d.wait_reason : '';
+    const sess = LS.session_of(nowMs);
+    $('vsub').textContent = sess ? 'in killzone — strict filters active'
+                                 : 'outside killzones — no signals';
+    const n = signalsToday.length;
+    $('reason').textContent = sess
+      ? (n ? '' : '⏳ in killzone — waiting for a pool sweep…')
+      : '⏳ Outside killzones — pools still mapped, no signals';
   }
-  document.getElementById('ctx').textContent =
-    'H1 ' + (d.trend_h1||'–') + ' · H4 ' + (d.h4_regime||'–') + ' (context)';
 
-  document.getElementById('above').innerHTML =
-    d.liquidity_map.above.map(poolRow).join('') || '<div class="empty">none</div>';
-  document.getElementById('below').innerHTML =
-    d.liquidity_map.below.map(poolRow).join('') || '<div class="empty">none</div>';
+  const trend = LS.structure_trend(h1c, LS.CONFIG.h1_left, LS.CONFIG.h1_right);
+  const h4r = LS.structure_trend(h4c, LS.CONFIG.h4_left, LS.CONFIG.h4_right);
+  $('ctx').textContent = 'H1 ' + trend + ' · H4 ' + h4r + ' (context)';
+  const tb = $('trend');
+  tb.textContent = 'H1 ' + trend;
+  tb.className = 'badge' + (trend === 'UPTREND' ? ' up' : trend === 'DOWNTREND' ? ' dn' : '');
+  const sb = $('session'), sess = LS.session_of(nowMs);
+  sb.textContent = sess ? '● ' + sess : '○ OFF';
+  sb.className = 'badge' + (sess ? ' on' : '');
 
-  const log = d.signals_today || [];
-  document.getElementById('log').innerHTML = log.length ? log.map(x => {
+  const map = LS.liquidity_map(price, pools);
+  $('above').innerHTML = map.above.map(poolRow).join('') || '<div class="empty">none</div>';
+  $('below').innerHTML = map.below.map(poolRow).join('') || '<div class="empty">none</div>';
+
+  $('log').innerHTML = signalsToday.length ? signalsToday.map(x => {
     const oc = x.outcome
       ? `<span class="${x.outcome==='TP'?'win':'loss'}">${x.outcome} ${x.r>0?'+':''}${x.r}R</span>`
       : '<span style="color:var(--dim)">open</span>';
-    return `<tr><td>${fmtT(x.signal_at)}</td><td class="${x.direction}">${x.direction}</td>`
+    return `<tr><td>${fmtT(Date.parse(x.signal_at))}</td><td class="${x.direction}">${x.direction}</td>`
       + `<td>${x.entry.toFixed(2)}</td><td>1:${x.rr.toFixed(1)}</td><td>${oc}</td></tr>`;
-  }).join('') : '<tr><td colspan="5" class="empty">no signals yet — strict filter, normal</td></tr>';
+  }).join('') : '<tr><td colspan="5" class="empty">no signals yet today — strict filter, this is normal</td></tr>';
 
-  document.getElementById('updated').textContent =
-    'updated ' + fmtD(d.updated_at) + ' PKT · refreshes 60s';
-  freshness();
+  $('updated').textContent = 'engine ' + fmtD(nowMs) + ' PKT';
 }
 
-/* data-freshness badge: green LIVE if engine wrote <8 min ago */
-function freshness(){
-  if(!DATA) return;
-  const ageMin = (Date.now() - new Date(DATA.updated_at).getTime()) / 60000;
-  const fb = document.getElementById('fresh');
-  if(ageMin < 8){ fb.textContent = '● LIVE'; fb.className = 'badge on'; }
-  else { fb.textContent = '○ ' + Math.round(ageMin) + 'm old'; fb.className = 'badge'; }
+/* ---------------- chart ---------------- */
+function render(nowMs, m1c, h1c, h4c){
+  renderPanels(nowMs, h1c, h4c);
+  drawChart(nowMs);
 }
 
-/* ── native candlestick chart ───────────────── */
-function drawChart(d){
-  const wrap = document.getElementById('chartWrap');
-  const cv = document.getElementById('chart');
+function drawChart(nowMs){
+  const wrap = $('chartWrap'), cv = $('chart');
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
   const W = wrap.clientWidth, H = wrap.clientHeight;
-  if(!W || !H) return;
+  if(!W || !H || !M1.length) return;
   cv.width = W * dpr; cv.height = H * dpr;
   const c = cv.getContext('2d');
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.clearRect(0, 0, W, H);
 
-  const candles = d.candles || [];
-  const AXW = 60, AXH = 22;                 // price axis / time axis
+  const candles = M1.slice(-240);              // closed + live forming candle
+  const AXW = 60, AXH = 22;
   const pw = W - AXW, ph = H - AXH;
   let lo = Infinity, hi = -Infinity;
   const consider = v => { if(v < lo) lo = v; if(v > hi) hi = v; };
-  candles.forEach(k => { consider(k[3]); consider(k[2]); });
-  [...d.liquidity_map.above, ...d.liquidity_map.below].forEach(p => consider(p.price));
-  const s = d.active_signal;
-  if(s) [s.entry, s.sl, s.tp].forEach(consider);
-  if(!isFinite(lo)){ lo = d.price - 5; hi = d.price + 5; }
+  candles.forEach(k => { consider(k.l); consider(k.h); });
+  pools.forEach(p => consider(p.price));
+  const act = activeSignal(nowMs);
+  if(act) [act.entry, act.sl, act.tp].forEach(consider);
+  if(!isFinite(lo)){ lo = 4100; hi = 4200; }
   const pad = ((hi - lo) * 0.10) || 1;
   lo -= pad; hi += pad;
   const y = v => ph - (v - lo) / (hi - lo) * ph;
 
-  // grid + price labels
   c.lineWidth = 1; c.font = '10px system-ui';
   for(let i = 0; i <= 5; i++){
     const v = lo + (hi - lo) * i / 5, yy = Math.round(y(v)) + .5;
@@ -240,7 +290,6 @@ function drawChart(d){
     c.fillStyle = '#5b6478'; c.fillText(v.toFixed(1), pw + 6, yy + 3);
   }
 
-  // liquidity pool bands (±$0.30)
   const band = (p, fill, edge) => {
     const y1 = y(p.price + .30), y2 = y(p.price - .30);
     c.fillStyle = fill; c.fillRect(0, y1, pw, y2 - y1);
@@ -252,60 +301,159 @@ function drawChart(d){
     c.fillStyle = edge || '#6b7488';
     c.fillText(p.tf + (p.premium ? ' ★' : ''), 6, (y1 + y2) / 2 - 4);
   };
-  d.liquidity_map.above.forEach(p => band(p, 'rgba(239,68,68,.08)', p.premium ? '#d4a93c' : null));
-  d.liquidity_map.below.forEach(p => band(p, 'rgba(34,197,94,.08)', p.premium ? '#d4a93c' : null));
+  const price = M1[M1.length-1].c;
+  const map = LS.liquidity_map(price, pools);
+  map.above.forEach(p => band(p, 'rgba(239,68,68,.08)', p.premium ? '#d4a93c' : null));
+  map.below.forEach(p => band(p, 'rgba(34,197,94,.08)', p.premium ? '#d4a93c' : null));
 
-  // candles
-  const n = candles.length, cw = n ? pw / n : pw;
+  const n = candles.length, cw = pw / n;
   for(let i = 0; i < n; i++){
-    const k = candles[i], o = k[1], hh = k[2], ll = k[3], cc = k[4];
+    const k = candles[i];
     const x = i * cw + cw / 2, bw = Math.max(1, cw * 0.62);
-    const col = cc >= o ? '#22c55e' : '#ef4444';
-    c.strokeStyle = col; c.fillStyle = col;
-    c.beginPath(); c.moveTo(x, y(hh)); c.lineTo(x, y(ll)); c.stroke();
-    const yO = y(o), yC = y(cc);
-    c.fillRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1, Math.abs(yC - yO)));
+    const live = i === n - 1;                    // forming candle: hollow
+    const col = k.c >= k.o ? '#22c55e' : '#ef4444';
+    c.strokeStyle = col;
+    c.beginPath(); c.moveTo(x, y(k.h)); c.lineTo(x, y(k.l)); c.stroke();
+    const yO = y(k.o), yC = y(k.c);
+    if(live){ c.strokeRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1.5, Math.abs(yC - yO))); }
+    else { c.fillStyle = col; c.fillRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1, Math.abs(yC - yO))); }
   }
 
-  // time labels (PKT) every 30 bars
   c.fillStyle = '#5b6478';
   for(let i = 0; i < n; i += 30){
-    c.fillText(fmtT(candles[i][0]), i * cw + cw / 2 - 14, H - 7);
+    c.fillText(fmtT(candles[i].t), i * cw + cw / 2 - 14, H - 7);
   }
 
-  // horizontal level lines with price tags
   const level = (v, color, label, dash) => {
     const yy = Math.round(y(v)) + .5;
     c.strokeStyle = color; c.lineWidth = 1.4;
-    c.setLineDash(dash || []); 
+    c.setLineDash(dash || []);
     c.beginPath(); c.moveTo(0, yy); c.lineTo(pw, yy); c.stroke();
     c.setLineDash([]); c.lineWidth = 1;
-    const txt = label + ' ' + v.toFixed(2);
+    const txt = (label ? label + ' ' : '') + v.toFixed(2);
     c.fillStyle = color; c.fillRect(pw, yy - 9, AXW, 18);
     c.fillStyle = '#0a0e14'; c.fillText(txt, pw + 4, yy + 3.5);
   };
-  if(s){
-    level(s.tp, '#22c55e', 'TP');
-    level(s.entry, '#3b82f6', 'EN', [7, 5]);
-    level(s.sl, '#ef4444', 'SL');
+  if(act){
+    level(act.tp, '#22c55e', 'TP');
+    level(act.entry, '#3b82f6', 'EN', [7, 5]);
+    level(act.sl, '#ef4444', 'SL');
   }
-  level(d.price, '#d4a93c', '', [3, 4]);   // last price
+  level(price, '#d4a93c', '', [3, 4]);
 }
 
-async function load(){
-  try{
-    const r = await fetch('signals.json?_=' + Date.now(), {cache: 'no-store'});
-    DATA = await r.json();
-    renderPanels(DATA);
-    drawChart(DATA);
-  }catch(e){
-    document.getElementById('updated').textContent = '⚠️ could not load signals.json';
+/* ---------------- live feed ---------------- */
+function setFresh(state){
+  const fb = $('fresh');
+  if(state === 'live'){ fb.textContent = '● LIVE'; fb.className = 'badge on'; }
+  else if(state === 'connecting'){ fb.textContent = '○ CONNECTING…'; fb.className = 'badge'; }
+  else { fb.textContent = '○ RECONNECTING…'; fb.className = 'badge warn'; }
+}
+
+function onTick(bar){
+  const last = M1[M1.length - 1];
+  if(!last) return;
+  if(bar.t === last.t){ M1[M1.length - 1] = bar; }
+  else if(bar.t > last.t){
+    M1.push(bar);
+    if(M1.length > 1600) M1.splice(0, M1.length - 1600);
+    onNewClosedCandle();
+    return;
+  }
+  render(Date.now(),
+    LS.closed_only(M1, Date.now()),
+    LS.closed_only(H1, Date.now()),
+    LS.closed_only(H4, Date.now()));
+}
+
+function onNewClosedCandle(){
+  recompute();   // pools + signals + outcomes on the new closed candle
+}
+
+function connectWS(){
+  setFresh(wsFails === 0 ? 'connecting' : 'reconnecting');
+  try { ws = new WebSocket(WS_URL); } catch(e){ schedulePoll(); return; }
+  ws.onopen = () => { wsFails = 0; setFresh('live'); };
+  ws.onmessage = e => {
+    try {
+      const k = JSON.parse(e.data).k;
+      if(!k) return;
+      onTick({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c });
+    } catch(err2){ /* ignore malformed tick */ }
+  };
+  const down = () => {
+    try { ws.close(); } catch(e2){}
+    wsFails++;
+    if(wsFails >= 3){ schedulePoll(); return; }   // WS hostile network -> REST poll
+    setFresh('reconnecting');
+    setTimeout(connectWS, Math.min(30000, 2000 * wsFails));
+  };
+  ws.onclose = down; ws.onerror = down;
+}
+
+/* REST-poll fallback (15s) if websocket is blocked on this network */
+async function pollOnce(){
+  try {
+    const bars = await klines('1m', 3);
+    const last = M1[M1.length - 1];
+    const newest = bars[bars.length - 1];
+    if(newest.t > last.t){
+      // merge any missing closed candles
+      for(const b of bars){ if(b.t > last.t - 60000 && b.t < newest.t && !M1.some(x => x.t === b.t)) M1.push(b); }
+      M1.push(newest);
+      if(M1.length > 1600) M1.splice(0, M1.length - 1600);
+      onNewClosedCandle();
+    } else {
+      onTick(newest);
+    }
+    setFresh('live');
+  } catch(e){ setFresh('reconnecting'); }
+}
+function schedulePoll(){
+  if(pollTimer) return;
+  setFresh('reconnecting');
+  pollTimer = setInterval(pollOnce, 15000);
+  pollOnce();
+}
+
+async function refreshHigherTFs(){
+  try {
+    const [h1, h4] = await Promise.all([klines('1h', 500), klines('4h', 500)]);
+    H1 = h1; H4 = h4;
+    recompute();
+  } catch(e){ /* keep old TFs on failure */ }
+}
+
+async function resync(){
+  try {
+    const bars = await klines('1m', 10);
+    const map = new Map(M1.map(b => [b.t, b]));
+    for(const b of bars) map.set(b.t, b);
+    M1 = [...map.values()].sort((a, b) => a.t - b.t).slice(-1600);
+    onNewClosedCandle();
+  } catch(e){}
+}
+
+async function boot(){
+  try {
+    const [m1, h1, h4] = await Promise.all([
+      klines('1m', 1500), klines('1h', 500), klines('4h', 500),
+    ]);
+    M1 = m1; H1 = h1; H4 = h4;
+    recompute();
+    connectWS();
+    setInterval(refreshHigherTFs, 5 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if(!document.hidden) resync(); });
+    window.addEventListener('resize', () => {
+      const nowMs = Date.now();
+      render(nowMs, LS.closed_only(M1, nowMs), LS.closed_only(H1, nowMs), LS.closed_only(H4, nowMs));
+    });
+  } catch(e){
+    err('Could not reach the price feed. Check your connection and reload. (' + e.message + ')');
+    $('vsub').textContent = 'feed unreachable';
   }
 }
-window.addEventListener('resize', () => { if(DATA) drawChart(DATA); });
-load();
-setInterval(load, 60000);
-setInterval(freshness, 30000);
+boot();
 </script>
 </body>
 </html>
