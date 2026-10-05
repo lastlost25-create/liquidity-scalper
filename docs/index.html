@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Liquidity Scalper · PAXG Live</title>
+<title>Liquidity Scalper · XAUUSD Live</title>
 <style>
   :root{--bg:#0a0e14;--card:#11161f;--line:#1e2634;--txt:#e6eaf2;--dim:#8b94a7;
     --green:#22c55e;--red:#ef4444;--gold:#d4a93c;--blue:#3b82f6}
@@ -83,7 +83,7 @@
 
 <div id="topbar">
   <h1>⚡ LIQUIDITY <span>SCALPER</span></h1>
-  <span class="sym">PAXG · 1m ≈ XAUUSD</span>
+  <span class="sym" id="symLabel">XAUUSD · 1m</span>
   <span class="badge" id="fresh">···</span>
   <div id="price">–</div>
   <span class="badge" id="trend">H1 ···</span>
@@ -124,22 +124,25 @@
   </div>
 </div>
 
-<div id="foot">⚠️ Educational only — not financial advice · PAXG tracks XAUUSD within a few $ ·
-  tick-live via Binance public feed · <span id="updated">connecting…</span></div>
+<div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
+  <span id="updated">…</span></div>
 
 <script src="engine.js"></script>
 <script>
 'use strict';
 /* Live client-side Liquidity Scalper.
- * Feed: Binance public market data (data-api.binance.vision REST +
- * data-stream.binance.vision websocket). No API key, no account, no server.
- * Engine: engine.js — bit-for-bit port of the Python engine (verified:
- * 14/14 identical signals on 5 test dates). Closed candles only, no repaint. */
-const API = 'https://data-api.binance.vision';
-const WS_URL = 'wss://data-stream.binance.vision/ws/paxgusdt@kline_1m';
+ * FEED: Yahoo Finance XAUUSD=X (spot composite, tracks Exness/OANDA within ~$1)
+ *       — REST history + 20s polling. No key, no account.
+ *       Fallback: Binance PAXGUSDT public feed (websocket tick-live). No key.
+ * ENGINE: engine.js — bit-for-bit port of the Python engine (verified 14/14
+ *       identical signals on 5 test dates). Closed candles only, no repaint. */
+const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X';
+const PAXG_API = 'https://data-api.binance.vision';
+const PAXG_WS = 'wss://data-stream.binance.vision/ws/paxgusdt@kline_1m';
 const PKT = 'Asia/Karachi';
 const FRESH_MIN = 120;               // active-signal recency, like the Python engine
 
+let FEED = null;                     // 'yahoo' | 'paxg'
 let M1 = [], H1 = [], H4 = [];       // M1 includes the forming candle last
 let pools = [], signalsToday = [];
 let ws = null, wsFails = 0, pollTimer = null, lastPrice = 0;
@@ -147,6 +150,7 @@ let ws = null, wsFails = 0, pollTimer = null, lastPrice = 0;
 const $ = id => document.getElementById(id);
 const fmtT = ms => new Date(ms).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:PKT});
 const fmtD = ms => new Date(ms).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:PKT});
+const marketOpen = ms => { const d = new Date(ms).getUTCDay(); return d !== 0 && d !== 6; };
 
 function err(msg){
   const e = $('err');
@@ -154,14 +158,45 @@ function err(msg){
   clearTimeout(err._t); err._t = setTimeout(() => e.style.display = 'none', 8000);
 }
 
-/* ---------------- data ---------------- */
-async function klines(interval, limit){
-  const r = await fetch(`${API}/api/v3/klines?symbol=PAXGUSDT&interval=${interval}&limit=${limit}`);
-  if(!r.ok) throw new Error('feed HTTP ' + r.status);
-  const d = await r.json();
-  return d.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] }));
+/* ---------------- feeds ---------------- */
+async function yahooKlines(interval, range){
+  const r = await fetch(`${YAHOO}?interval=${interval}&range=${range}`);
+  if(!r.ok) throw new Error('Yahoo HTTP ' + r.status);
+  const j = await r.json();
+  const res = j.chart.result[0];
+  const q = res.indicators.quote[0];
+  const out = [];
+  for(let i = 0; i < res.timestamp.length; i++){
+    const o = q.open[i], h = q.high[i], l = q.low[i], c = q.close[i];
+    if(o == null || h == null || l == null || c == null) continue;
+    out.push({ t: res.timestamp[i] * 1000, o, h, l, c });
+  }
+  out.sort((a, b) => a.t - b.t);
+  return out;
 }
-const closedM1 = () => M1.slice(0, -1);
+function resample4h(h1){
+  const out = []; let cur = null;
+  for(const b of h1){
+    const key = Math.floor(b.t / 14400000) * 14400000;
+    if(!cur || cur.t !== key){ cur = { t: key, o: b.o, h: b.h, l: b.l, c: b.c }; out.push(cur); }
+    else { cur.h = Math.max(cur.h, b.h); cur.l = Math.min(cur.l, b.l); cur.c = b.c; }
+  }
+  return out;
+}
+async function paxgKlines(interval, limit){
+  const r = await fetch(`${PAXG_API}/api/v3/klines?symbol=PAXGUSDT&interval=${interval}&limit=${limit}`);
+  if(!r.ok) throw new Error('PAXG HTTP ' + r.status);
+  return (await r.json()).map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] }));
+}
+function applyFeedLabel(){
+  if(FEED === 'yahoo'){
+    $('symLabel').textContent = 'XAUUSD · 1m';
+    $('feedNote').textContent = 'XAUUSD spot via Yahoo Finance · close to Exness/OANDA';
+  } else {
+    $('symLabel').textContent = 'PAXG · 1m ≈ XAUUSD';
+    $('feedNote').textContent = 'PAXG feed (fallback) · tracks XAUUSD within a few $';
+  }
+}
 
 /* ---------------- engine ---------------- */
 function recompute(){
@@ -202,7 +237,8 @@ function renderPanels(nowMs, h1c, h4c){
   else if(price < lastPrice) pe.classList.add('tick-dn');
   lastPrice = price;
 
-  const act = activeSignal(nowMs);
+  const open = marketOpen(nowMs);
+  const act = open ? activeSignal(nowMs) : null;
   const sp = $('signalPanel');
   const verdict = act ? act.direction : 'WAIT';
   sp.className = 'panel ' + verdict;
@@ -218,13 +254,12 @@ function renderPanels(nowMs, h1c, h4c){
     $('reason').textContent = '💧 ' + act.reason;
   } else {
     plan.style.display = 'none';
-    const sess = LS.session_of(nowMs);
-    $('vsub').textContent = sess ? 'in killzone — strict filters active'
-                                 : 'outside killzones — no signals';
-    const n = signalsToday.length;
-    $('reason').textContent = sess
-      ? (n ? '' : '⏳ in killzone — waiting for a pool sweep…')
-      : '⏳ Outside killzones — pools still mapped, no signals';
+    const sess = open ? LS.session_of(nowMs) : null;
+    $('vsub').textContent = !open ? 'market closed (weekend)' :
+      sess ? 'in killzone — strict filters active' : 'outside killzones — no signals';
+    $('reason').textContent = !open ? '' :
+      sess ? (signalsToday.length ? '' : '⏳ in killzone — waiting for a pool sweep…')
+           : '⏳ Outside killzones — pools still mapped, no signals';
   }
 
   const trend = LS.structure_trend(h1c, LS.CONFIG.h1_left, LS.CONFIG.h1_right);
@@ -233,8 +268,8 @@ function renderPanels(nowMs, h1c, h4c){
   const tb = $('trend');
   tb.textContent = 'H1 ' + trend;
   tb.className = 'badge' + (trend === 'UPTREND' ? ' up' : trend === 'DOWNTREND' ? ' dn' : '');
-  const sb = $('session'), sess = LS.session_of(nowMs);
-  sb.textContent = sess ? '● ' + sess : '○ OFF';
+  const sb = $('session'), sess = open ? LS.session_of(nowMs) : null;
+  sb.textContent = !open ? '○ CLOSED' : sess ? '● ' + sess : '○ OFF';
   sb.className = 'badge' + (sess ? ' on' : '');
 
   const map = LS.liquidity_map(price, pools);
@@ -268,14 +303,14 @@ function drawChart(nowMs){
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.clearRect(0, 0, W, H);
 
-  const candles = M1.slice(-240);              // closed + live forming candle
+  const candles = M1.slice(-240);
   const AXW = 60, AXH = 22;
   const pw = W - AXW, ph = H - AXH;
   let lo = Infinity, hi = -Infinity;
   const consider = v => { if(v < lo) lo = v; if(v > hi) hi = v; };
   candles.forEach(k => { consider(k.l); consider(k.h); });
   pools.forEach(p => consider(p.price));
-  const act = activeSignal(nowMs);
+  const act = marketOpen(nowMs) ? activeSignal(nowMs) : null;
   if(act) [act.entry, act.sl, act.tp].forEach(consider);
   if(!isFinite(lo)){ lo = 4100; hi = 4200; }
   const pad = ((hi - lo) * 0.10) || 1;
@@ -310,7 +345,7 @@ function drawChart(nowMs){
   for(let i = 0; i < n; i++){
     const k = candles[i];
     const x = i * cw + cw / 2, bw = Math.max(1, cw * 0.62);
-    const live = i === n - 1;                    // forming candle: hollow
+    const live = i === n - 1;
     const col = k.c >= k.o ? '#22c55e' : '#ef4444';
     c.strokeStyle = col;
     c.beginPath(); c.moveTo(x, y(k.h)); c.lineTo(x, y(k.l)); c.stroke();
@@ -342,7 +377,7 @@ function drawChart(nowMs){
   level(price, '#d4a93c', '', [3, 4]);
 }
 
-/* ---------------- live feed ---------------- */
+/* ---------------- live wiring ---------------- */
 function setFresh(state){
   const fb = $('fresh');
   if(state === 'live'){ fb.textContent = '● LIVE'; fb.className = 'badge on'; }
@@ -350,6 +385,10 @@ function setFresh(state){
   else { fb.textContent = '○ RECONNECTING…'; fb.className = 'badge warn'; }
 }
 
+function closedView(){
+  const nowMs = Date.now();
+  return [nowMs, LS.closed_only(M1, nowMs), LS.closed_only(H1, nowMs), LS.closed_only(H4, nowMs)];
+}
 function onTick(bar){
   const last = M1[M1.length - 1];
   if(!last) return;
@@ -357,101 +396,125 @@ function onTick(bar){
   else if(bar.t > last.t){
     M1.push(bar);
     if(M1.length > 1600) M1.splice(0, M1.length - 1600);
-    onNewClosedCandle();
+    recompute();
     return;
   }
-  render(Date.now(),
-    LS.closed_only(M1, Date.now()),
-    LS.closed_only(H1, Date.now()),
-    LS.closed_only(H4, Date.now()));
+  const [nowMs, m1c, h1c, h4c] = closedView();
+  render(nowMs, m1c, h1c, h4c);
+}
+function mergeBars(bars){
+  const map = new Map(M1.map(b => [b.t, b]));
+  let added = 0;
+  for(const b of bars){ if(!map.has(b.t)){ map.set(b.t, b); added++; } else map.set(b.t, b); }
+  const before = M1.length;
+  M1 = [...map.values()].sort((a, b) => a.t - b.t).slice(-1600);
+  return M1.length !== before || added > 0;
 }
 
-function onNewClosedCandle(){
-  recompute();   // pools + signals + outcomes on the new closed candle
+/* Yahoo path: 20s REST polling (no websocket on this feed) */
+async function yahooPoll(){
+  try {
+    const bars = await yahooKlines('1m', '1d');
+    const lastT = M1.length ? M1[M1.length - 1].t : 0;
+    const newest = bars[bars.length - 1];
+    mergeBars(bars);
+    if(newest.t > lastT) recompute();
+    else { const [nowMs, m1c, h1c, h4c] = closedView(); render(nowMs, m1c, h1c, h4c); }
+    setFresh('live');
+  } catch(e){ setFresh('reconnecting'); }
 }
 
+/* PAXG fallback path: websocket ticks, REST poll if WS is blocked */
 function connectWS(){
   setFresh(wsFails === 0 ? 'connecting' : 'reconnecting');
-  try { ws = new WebSocket(WS_URL); } catch(e){ schedulePoll(); return; }
+  try { ws = new WebSocket(PAXG_WS); } catch(e){ schedulePoll(); return; }
   ws.onopen = () => { wsFails = 0; setFresh('live'); };
   ws.onmessage = e => {
     try {
       const k = JSON.parse(e.data).k;
-      if(!k) return;
-      onTick({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c });
-    } catch(err2){ /* ignore malformed tick */ }
+      if(k) onTick({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c });
+    } catch(e2){}
   };
   const down = () => {
     try { ws.close(); } catch(e2){}
     wsFails++;
-    if(wsFails >= 3){ schedulePoll(); return; }   // WS hostile network -> REST poll
+    if(wsFails >= 3){ schedulePoll(); return; }
     setFresh('reconnecting');
     setTimeout(connectWS, Math.min(30000, 2000 * wsFails));
   };
   ws.onclose = down; ws.onerror = down;
 }
-
-/* REST-poll fallback (15s) if websocket is blocked on this network */
-async function pollOnce(){
+async function paxgPollOnce(){
   try {
-    const bars = await klines('1m', 3);
+    const bars = await paxgKlines('1m', 3);
     const last = M1[M1.length - 1];
     const newest = bars[bars.length - 1];
-    if(newest.t > last.t){
-      // merge any missing closed candles
-      for(const b of bars){ if(b.t > last.t - 60000 && b.t < newest.t && !M1.some(x => x.t === b.t)) M1.push(b); }
-      M1.push(newest);
-      if(M1.length > 1600) M1.splice(0, M1.length - 1600);
-      onNewClosedCandle();
-    } else {
-      onTick(newest);
-    }
+    if(newest.t > last.t){ mergeBars(bars); recompute(); }
+    else onTick(newest);
     setFresh('live');
   } catch(e){ setFresh('reconnecting'); }
 }
 function schedulePoll(){
   if(pollTimer) return;
   setFresh('reconnecting');
-  pollTimer = setInterval(pollOnce, 15000);
-  pollOnce();
+  pollTimer = setInterval(paxgPollOnce, 15000);
+  paxgPollOnce();
 }
 
 async function refreshHigherTFs(){
   try {
-    const [h1, h4] = await Promise.all([klines('1h', 500), klines('4h', 500)]);
-    H1 = h1; H4 = h4;
+    if(FEED === 'yahoo'){
+      const h1 = await yahooKlines('1h', '1mo');
+      H1 = h1; H4 = resample4h(h1);
+    } else {
+      const [h1, h4] = await Promise.all([paxgKlines('1h', 500), paxgKlines('4h', 500)]);
+      H1 = h1; H4 = h4;
+    }
     recompute();
-  } catch(e){ /* keep old TFs on failure */ }
-}
-
-async function resync(){
-  try {
-    const bars = await klines('1m', 10);
-    const map = new Map(M1.map(b => [b.t, b]));
-    for(const b of bars) map.set(b.t, b);
-    M1 = [...map.values()].sort((a, b) => a.t - b.t).slice(-1600);
-    onNewClosedCandle();
   } catch(e){}
 }
 
 async function boot(){
+  /* Primary: Yahoo XAUUSD spot (closest free match to Exness/OANDA).
+     Fallback: Binance PAXG (verified working). */
   try {
-    const [m1, h1, h4] = await Promise.all([
-      klines('1m', 1500), klines('1h', 500), klines('4h', 500),
-    ]);
-    M1 = m1; H1 = h1; H4 = h4;
-    recompute();
-    connectWS();
-    setInterval(refreshHigherTFs, 5 * 60 * 1000);
-    document.addEventListener('visibilitychange', () => { if(!document.hidden) resync(); });
-    window.addEventListener('resize', () => {
-      const nowMs = Date.now();
-      render(nowMs, LS.closed_only(M1, nowMs), LS.closed_only(H1, nowMs), LS.closed_only(H4, nowMs));
-    });
-  } catch(e){
-    err('Could not reach the price feed. Check your connection and reload. (' + e.message + ')');
-    $('vsub').textContent = 'feed unreachable';
+    const [m1, h1] = await Promise.all([yahooKlines('1m', '1d'), yahooKlines('1h', '1mo')]);
+    if(m1.length < 30 || h1.length < 30) throw new Error('thin Yahoo data');
+    M1 = m1; H1 = h1; H4 = resample4h(h1);
+    FEED = 'yahoo';
+  } catch(e1){
+    try {
+      const [m1, h1, h4] = await Promise.all([
+        paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
+      M1 = m1; H1 = h1; H4 = h4;
+      FEED = 'paxg';
+    } catch(e2){
+      err('Could not reach any price feed. Check your connection and reload.');
+      $('vsub').textContent = 'feed unreachable';
+      return;
+    }
   }
+  applyFeedLabel();
+  recompute();
+  if(FEED === 'yahoo'){
+    setFresh('live');
+    pollTimer = setInterval(yahooPoll, 20000);
+  } else {
+    connectWS();
+  }
+  setInterval(refreshHigherTFs, 5 * 60 * 1000);
+  document.addEventListener('visibilitychange', async () => {
+    if(document.hidden) return;
+    try {
+      if(FEED === 'yahoo'){ const bars = await yahooKlines('1m', '1d'); mergeBars(bars); }
+      else { const bars = await paxgKlines('1m', 10); mergeBars(bars); }
+      recompute();
+    } catch(e){}
+  });
+  window.addEventListener('resize', () => {
+    const [nowMs, m1c, h1c, h4c] = closedView();
+    render(nowMs, m1c, h1c, h4c);
+  });
 }
 boot();
 </script>
