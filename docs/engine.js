@@ -258,7 +258,10 @@ function track_outcome(signal, barsAfter, maxHoldHours = 24) {
       return { outcome: won ? 'TP' : 'SL', r: won ? signal.rr : -1.0, closed_at: iso(c.t) };
     }
   }
-  const last = barsAfter[barsAfter.length - 1];
+  // Expired: exit at the deadline bar, never at the end of the data.
+  let exitBar = null;
+  for (const c of barsAfter) { if (c.t > deadline) break; exitBar = c; }
+  const last = exitBar || barsAfter[0];
   const r = signal.direction === 'LONG'
     ? (last.c - signal.entry) / Math.abs(signal.entry - signal.sl)
     : (signal.entry - last.c) / Math.abs(signal.entry - signal.sl);
@@ -446,7 +449,10 @@ function track_swing_outcome(signal, barsAfter, maxHoldHours = 48) {
   }
   if (best > 0) return { outcome: 'TP' + best, r: rrs[best - 1], closed_at: iso(closedAt) };
   if (stopped) return { outcome: 'SL', r: -1.0, closed_at: iso(closedAt) };
-  const last = barsAfter[barsAfter.length - 1];
+  // Expired: exit at the deadline bar, never at the end of the data.
+  let sexitBar = null;
+  for (const c of barsAfter) { if (c.t > deadline) break; sexitBar = c; }
+  const last = sexitBar || barsAfter[0];
   if (!last) return { outcome: null, r: null };
   const r = signal.direction === 'LONG'
     ? (last.c - signal.entry) / Math.abs(signal.entry - signal.sl)
