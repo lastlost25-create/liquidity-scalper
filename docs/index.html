@@ -16,6 +16,8 @@
   #topbar h1{font-size:15px;letter-spacing:.5px;white-space:nowrap}
   #topbar h1 span{color:var(--gold)}
   #topbar .sym{font-size:11px;color:var(--dim);white-space:nowrap}
+  .ktag{font-size:9px;color:var(--gold);border:1px solid var(--gold);border-radius:3px;
+    padding:0 3px;margin-right:4px;white-space:nowrap}
   button.sym{background:none;border:1px solid #2a3348;border-radius:6px;padding:3px 8px;
     cursor:pointer;font:inherit;color:var(--dim)}
   button.sym:active{transform:scale(.96)}
@@ -111,6 +113,8 @@
       <div><small>ENTRY</small><b id="pEntry">–</b></div>
       <div><small>STOP LOSS</small><b id="pSL">–</b></div>
       <div><small>TAKE PROFIT</small><b id="pTP">–</b></div>
+      <div id="tp2row" style="display:none"><small>TP2</small><b id="pTP2">–</b></div>
+      <div id="tp3row" style="display:none"><small>TP3</small><b id="pTP3">–</b></div>
       <div><small>R : R</small><b id="pRR">–</b></div>
     </div>
     <div id="reason"></div>
@@ -152,8 +156,9 @@ const PKT = 'Asia/Karachi';
 const FRESH_MIN = 120;               // active-signal recency, like the Python engine
 
 let FEED = null;                     // 'yahoo' | 'paxg'
-let M1 = [], H1 = [], H4 = [];       // M1 includes the forming candle last
+let M1 = [], H1 = [], H4 = [], M15 = []; // M1 includes the forming candle last
 let pools = [], signalsToday = [];
+let swings = [], swingSignalsToday = [];   // 15m "liq bias" swing setups
 let ws = null, wsFails = 0, pollTimer = null, lastPrice = 0;
 let yahooFails = 0, yahooRetryTimer = null, lastWSMsg = 0;
 
@@ -219,6 +224,7 @@ async function attemptYahooNow(){
     if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
     try { ws.close(); } catch(e){}
     M1 = m1; H1 = h1; H4 = resample4h(h1);
+    try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
     FEED = 'yahoo'; wsFails = 0; yahooFails = 0;
     applyFeedLabel();
     recompute();
@@ -249,12 +255,25 @@ function recompute(){
     return after.length ? Object.assign({}, s, LS.track_outcome(s, after))
                         : Object.assign({}, s, { outcome: null, r: null });
   });
+  // swing setups: 15m major swings + M1 sweep + confirmation
+  if(M15.length >= 30){
+    const m15c = LS.closed_only(M15, nowMs);
+    swings = LS.detect_swings(m15c, nowMs);
+    const swr = LS.build_swing_signals(m1c, swings, nowMs);
+    swingSignalsToday = swr.signals.map(s => {
+      const after = m1c.filter(b => b.t > Date.parse(s.signal_at));
+      return after.length ? Object.assign({}, s, LS.track_swing_outcome(s, after))
+                          : Object.assign({}, s, { outcome: null, r: null });
+    });
+  } else { swings = []; swingSignalsToday = []; }
+  const allSigs = signalsToday.concat(swingSignalsToday);
   // detect newly resolved trades -> pulse the result banner (no flash on first load)
   const cur = {};
   let justResolved = null;
-  for(const s of signalsToday){
-    cur[s.signal_at] = s.outcome || null;
-    if(prevOutcomes && s.outcome && !prevOutcomes[s.signal_at]) justResolved = s.signal_at;
+  for(const s of allSigs){
+    const key = (s.kind || 'scalp') + '|' + s.signal_at;
+    cur[key] = s.outcome || null;
+    if(prevOutcomes && s.outcome && !prevOutcomes[key]) justResolved = key;
   }
   if(justResolved) flashSig = justResolved;
   prevOutcomes = cur;
@@ -262,12 +281,14 @@ function recompute(){
 }
 
 function activeSignal(nowMs){
-  // freshest signal first (by time) — the one the trader is watching
+  // freshest signal first (by time) — across scalp + swing setups
   const cutoff = nowMs - FRESH_MIN * 60000;
-  const fresh = signalsToday.filter(s => Date.parse(s.signal_at) >= cutoff)
+  const fresh = signalsToday.concat(swingSignalsToday)
+    .filter(s => Date.parse(s.signal_at) >= cutoff)
     .sort((a, b) => Date.parse(b.signal_at) - Date.parse(a.signal_at));
   return fresh.length ? fresh[0] : null;
 }
+function sigKey(s){ return (s.kind || 'scalp') + '|' + s.signal_at; }
 
 let prevOutcomes = null;   // signal_at -> outcome; null until first compute
 let flashSig = null;       // signal_at of a just-resolved trade (pulse banner)
@@ -295,24 +316,39 @@ function renderPanels(nowMs, h1c, h4c){
   const sp = $('signalPanel');
   const plan = $('plan');
   if(done){
-    const won = done.outcome === 'TP', lost = done.outcome === 'SL';
-    const cls = won ? 'TP' : lost ? 'SL' : 'WAIT';
-    const flash = flashSig === done.signal_at ? (won ? ' flashTP' : lost ? ' flashSL' : '') : '';
+    const tpWin = done.outcome && done.outcome.startsWith('TP');
+    const lost = done.outcome === 'SL';
+    const cls = tpWin ? 'TP' : lost ? 'SL' : 'WAIT';
+    const flash = flashSig === sigKey(done) ? (tpWin ? ' flashTP' : lost ? ' flashSL' : '') : '';
     sp.className = 'panel ' + cls + flash;
-    $('vtext').textContent = won ? '🎯 TP HIT' : lost ? '🛑 SL HIT' : '⌛ EXPIRED';
+    const lbl = done.outcome === 'TP' ? '🎯 TP HIT'
+      : tpWin ? `🎯 ${done.outcome} HIT` : lost ? '🛑 SL HIT' : '⌛ EXPIRED';
+    $('vtext').textContent = lbl;
     plan.style.display = 'none';
-    $('vsub').textContent = done.direction + ' · ' + fmtT(Date.parse(done.signal_at)) + ' PKT · ' + done.session;
-    const rc = won ? 'var(--green)' : lost ? 'var(--red)' : 'var(--dim)';
-    $('reason').innerHTML = `entry ${done.entry.toFixed(2)} · SL ${done.sl.toFixed(2)} · TP ${done.tp.toFixed(2)} → <b style="color:${rc}">${done.r > 0 ? '+' : ''}${done.r}R</b>`;
+    const kindTag = done.kind === 'swing' ? 'SWING ' : '';
+    $('vsub').textContent = kindTag + done.direction + ' · ' + fmtT(Date.parse(done.signal_at)) + ' PKT · ' + done.session;
+    const rc = tpWin ? 'var(--green)' : lost ? 'var(--red)' : 'var(--dim)';
+    const tpTxt = done.kind === 'swing'
+      ? `TP1 ${done.tp.toFixed(2)}${done.tp2 ? ' · TP2 ' + done.tp2.toFixed(2) : ''}${done.tp3 ? ' · TP3 ' + done.tp3.toFixed(2) : ''}`
+      : `TP ${done.tp.toFixed(2)}`;
+    $('reason').innerHTML = `entry ${done.entry.toFixed(2)} · SL ${done.sl.toFixed(2)} · ${tpTxt} → <b style="color:${rc}">${done.r > 0 ? '+' : ''}${done.r}R</b>`;
   } else if(live){
     sp.className = 'panel ' + live.direction;
-    $('vtext').textContent = live.direction;
+    const kindTag = live.kind === 'swing' ? 'SWING ' : '';
+    $('vtext').textContent = kindTag + live.direction;
     plan.style.display = 'grid';
     $('pEntry').textContent = live.entry.toFixed(2);
     $('pSL').textContent = live.sl.toFixed(2);
     $('pTP').textContent = live.tp.toFixed(2);
     $('pRR').textContent = '1:' + live.rr.toFixed(2);
-    $('vsub').textContent = live.direction + ' · swept ' + fmtT(Date.parse(live.swept_at)) + ' PKT · ' + live.session;
+    const isSwing = live.kind === 'swing';
+    $('tp2row').style.display = isSwing && live.tp2 ? '' : 'none';
+    $('tp3row').style.display = isSwing && live.tp3 ? '' : 'none';
+    if(isSwing){
+      if(live.tp2) $('pTP2').textContent = live.tp2.toFixed(2) + ' (1:' + live.rr2.toFixed(1) + ')';
+      if(live.tp3) $('pTP3').textContent = live.tp3.toFixed(2) + ' (1:' + live.rr3.toFixed(1) + ')';
+    }
+    $('vsub').textContent = kindTag + live.direction + ' · swept ' + fmtT(Date.parse(live.swept_at)) + ' PKT · ' + live.session;
     $('reason').textContent = '💧 ' + live.reason;
   } else {
     plan.style.display = 'none';
@@ -338,12 +374,18 @@ function renderPanels(nowMs, h1c, h4c){
   $('above').innerHTML = map.above.map(poolRow).join('') || '<div class="empty">none</div>';
   $('below').innerHTML = map.below.map(poolRow).join('') || '<div class="empty">none</div>';
 
-  $('log').innerHTML = signalsToday.length ? signalsToday.map(x => {
+  const logRows = signalsToday.concat(swingSignalsToday)
+    .sort((a, b) => Date.parse(b.signal_at) - Date.parse(a.signal_at));
+  $('log').innerHTML = logRows.length ? logRows.map(x => {
+    const won = x.outcome && x.outcome.startsWith('TP');
     const oc = x.outcome
-      ? `<span class="${x.outcome==='TP'?'win':'loss'}">${x.outcome} ${x.r>0?'+':''}${x.r}R</span>`
+      ? `<span class="${won ? 'win' : 'loss'}">${x.outcome} ${x.r > 0 ? '+' : ''}${x.r}R</span>`
       : '<span style="color:var(--dim)">open</span>';
-    return `<tr><td>${fmtT(Date.parse(x.signal_at))}</td><td class="${x.direction}">${x.direction}</td>`
-      + `<td>${x.entry.toFixed(2)}</td><td>1:${x.rr.toFixed(1)}</td><td>${oc}</td></tr>`;
+    const ktag = x.kind === 'swing' ? '<span class="ktag">SWING</span> ' : '';
+    const tps = x.kind === 'swing'
+      ? `<div style="font-size:10px;color:var(--dim)">T2 ${x.tp2 ? x.tp2.toFixed(1) : '–'} · T3 ${x.tp3 ? x.tp3.toFixed(1) : '–'}</div>` : '';
+    return `<tr><td>${fmtT(Date.parse(x.signal_at))}</td><td class="${x.direction}">${ktag}${x.direction}</td>`
+      + `<td>${x.entry.toFixed(2)}${tps}</td><td>1:${x.rr.toFixed(1)}</td><td>${oc}</td></tr>`;
   }).join('') : '<tr><td colspan="5" class="empty">no signals yet today — strict filter, this is normal</td></tr>';
 
   $('updated').textContent = 'engine ' + fmtD(nowMs) + ' PKT';
@@ -374,8 +416,12 @@ function drawChart(nowMs){
   const price0 = M1[M1.length-1].c;
   const pmap = LS.liquidity_map(price0, pools);   // only drawn pools set the axis
   pmap.above.concat(pmap.below).forEach(p => consider(p.price));
+  const smap = LS.liquidity_map(price0, swings, 3); // nearest M15 swings
+  smap.above.concat(smap.below).forEach(p => consider(p.price));
   const act = marketOpen(nowMs) ? activeSignal(nowMs) : null;
-  if(act) [act.entry, act.sl, act.tp].forEach(consider);
+  if(act){
+    [act.entry, act.sl, act.tp, act.tp2, act.tp3].forEach(v => { if(v != null) consider(v); });
+  }
   if(!isFinite(lo)){ lo = 4100; hi = 4200; }
   const pad = ((hi - lo) * 0.10) || 1;
   lo -= pad; hi += pad;
@@ -403,6 +449,17 @@ function drawChart(nowMs){
   const price = price0;
   pmap.above.forEach(p => band(p, 'rgba(239,68,68,.08)', p.premium ? '#d4a93c' : null));
   pmap.below.forEach(p => band(p, 'rgba(34,197,94,.08)', p.premium ? '#d4a93c' : null));
+  // M15 major swing zones (liq-bias levels) — gold tint, distinct from H1/H4 pools
+  const sband = (p) => {
+    const y1 = y(p.price + .30), y2 = y(p.price - .30);
+    c.fillStyle = 'rgba(212,169,60,.10)'; c.fillRect(0, y1, pw, y2 - y1);
+    c.strokeStyle = '#d4a93c'; c.setLineDash([5, 4]); c.lineWidth = 1.2;
+    c.beginPath(); c.moveTo(0, (y1 + y2) / 2); c.lineTo(pw, (y1 + y2) / 2); c.stroke();
+    c.setLineDash([]); c.lineWidth = 1;
+    c.fillStyle = '#d4a93c';
+    c.fillText('M15' + (p.premium ? ' ★' : ''), 6, (y1 + y2) / 2 - 4);
+  };
+  smap.above.concat(smap.below).forEach(sband);
 
   const n = candles.length, cw = pw / n;
   for(let i = 0; i < n; i++){
@@ -434,7 +491,11 @@ function drawChart(nowMs){
     c.fillStyle = '#0a0e14'; c.fillText(txt, pw + 4, yy + 3.5);
   };
   if(act){
-    level(act.tp, '#22c55e', 'TP');
+    level(act.tp, '#22c55e', act.kind === 'swing' ? 'TP1' : 'TP');
+    if(act.kind === 'swing'){
+      if(act.tp2 != null) level(act.tp2, '#4ade80', 'TP2', [7, 5]);
+      if(act.tp3 != null) level(act.tp3, '#86efac', 'TP3', [3, 4]);
+    }
     level(act.entry, '#3b82f6', 'EN', [7, 5]);
     level(act.sl, '#ef4444', 'SL');
   }
@@ -507,6 +568,7 @@ async function switchToPaxg(){
       paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
     if(!m1.length) throw new Error('empty paxg');
     M1 = m1; H1 = h1; H4 = h4;
+    try { M15 = await paxgKlines('15m', 500); } catch(e){}
     FEED = 'paxg'; yahooFails = 0; wsFails = 0;
     applyFeedLabel();
     recompute();
@@ -573,9 +635,11 @@ async function refreshHigherTFs(){
     if(FEED === 'yahoo'){
       const h1 = await yahooKlines('1h', '1mo');
       H1 = h1; H4 = resample4h(h1);
+      try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
     } else {
       const [h1, h4] = await Promise.all([paxgKlines('1h', 500), paxgKlines('4h', 500)]);
       H1 = h1; H4 = h4;
+      try { M15 = await paxgKlines('15m', 500); } catch(e){}
     }
     recompute();
   } catch(e){}
@@ -629,15 +693,17 @@ async function boot(){
   /* Primary: Yahoo XAUUSD spot (closest free match to Exness/OANDA).
      Fallback: Binance PAXG (verified working). */
   try {
-    const [m1, h1] = await Promise.all([yahooKlines('1m', '1d'), yahooKlines('1h', '1mo')]);
+    const [m1, h1, m15] = await Promise.all([
+      yahooKlines('1m', '1d'), yahooKlines('1h', '1mo'), yahooKlines('15m', '1mo')]);
     if(m1.length < 30 || h1.length < 30) throw new Error('thin Yahoo data');
-    M1 = m1; H1 = h1; H4 = resample4h(h1);
+    M1 = m1; H1 = h1; H4 = resample4h(h1); M15 = m15;
     FEED = 'yahoo';
   } catch(e1){
     try {
-      const [m1, h1, h4] = await Promise.all([
-        paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
-      M1 = m1; H1 = h1; H4 = h4;
+      const [m1, h1, h4, m15] = await Promise.all([
+        paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500),
+        paxgKlines('15m', 500)]);
+      M1 = m1; H1 = h1; H4 = h4; M15 = m15;
       FEED = 'paxg';
     } catch(e2){
       err('Could not reach any price feed. Check your connection and reload.');
@@ -666,8 +732,10 @@ async function boot(){
       if(FEED === 'yahoo'){
         yahooFails = 0;
         const bars = await yahooKlines('1m', '1d'); mergeBars(bars);
+        try { M15 = await yahooKlines('15m', '1mo'); } catch(e2){}
       } else {
         const bars = await paxgKlines('1m', 10); mergeBars(bars);
+        try { M15 = await paxgKlines('15m', 500); } catch(e2){}
         if(!pollTimer && Date.now() - lastWSMsg > 45000){ try { ws.close(); } catch(e){} connectWS(); }
       }
       recompute();
