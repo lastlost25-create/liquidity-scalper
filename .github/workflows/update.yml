@@ -1,0 +1,71 @@
+name: update-signals
+
+# Runs the liquidity-sweep engine every 5 minutes and publishes signals.json
+# to GitHub Pages. 100% free tier: GitHub Actions + Pages + Twelve Data free API.
+#
+# One-time setup (see README.md):
+#   1. Get a free API key at https://twelvedata.com (lifetime free tier)
+#   2. Repo Settings -> Secrets -> Actions -> add TWELVEDATA_API_KEY
+#   3. Repo Settings -> Pages -> Source: "GitHub Actions"
+#
+# Credit math (Twelve Data free = 800 credits/day):
+#   every 5 min = 288 runs/day; M1 (1 cr) + H1 (1 cr) per run, H4 cached hourly.
+#   XAUUSD only — no silver.  => ~600 credits/day. Safely under the limit.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}  # manual "Run workflow" button
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install pandas requests
+
+      - name: Restore H4 cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/h4_cache.csv
+          key: h4-cache
+
+      - name: Run engine
+        env:
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+        run: |
+          # H1/H4 are refreshed from cache-aware logic inside the run script:
+          # M1 + H1 fetched every run, H4 re-fetched only if cache is older than 1h.
+          python3 scripts/run_live.py site/signals.json
+
+      - name: Commit updated signals.json
+        run: |
+          git config user.name "liquidity-scalper"
+          git config user.email "bot@liquidity-scalper.local"
+          git add site/signals.json
+          git diff --cached --quiet || git commit -m "signals update $(date -u +%FT%TZ)"
+          git push
+
+  deploy:
+    needs: engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+      - uses: actions/deploy-pages@v4
