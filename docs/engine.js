@@ -36,6 +36,7 @@ const CONFIG = {
   m15_left: 5, m15_right: 5,          // 15m fractal for major swings
   confirm_body_ratio: 0.6,            // "good body": body >= 60% of candle range
   max_swing_signals_per_day: 4,       // separate daily cap for swing setups
+  swing_sl_buffer: 3.00,             // swing stops sit $3 beyond the extreme (backtest: $0.40 = -0.30R, $3 = +0.45R)
 
   use_trend_filter: false,          // DEFAULT OFF (backtest: destroys the edge)
 };
@@ -372,7 +373,7 @@ function build_swing_signals(m1bars, swings, nowMs, dayMs = null, usedIds = null
       if (!sess) { stats.off_session = (stats.off_session || 0) + 1; continue; }
 
       const extreme = red ? Math.max(sw.price, sweep.h) : Math.min(sw.price, sweep.l);
-      const sl = red ? extreme + CONFIG.sl_buffer : extreme - CONFIG.sl_buffer;
+      const sl = red ? extreme + CONFIG.swing_sl_buffer : extreme - CONFIG.swing_sl_buffer;
 
       // TP1/TP2/TP3: the three most recent opposing 15m swings
       const opp = swings
