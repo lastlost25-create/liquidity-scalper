@@ -38,6 +38,12 @@
   #signalPanel.WAIT #vtext{color:var(--dim)}
   #signalPanel.LONG{border-color:var(--green)} #signalPanel.LONG #vtext{color:var(--green)}
   #signalPanel.SHORT{border-color:var(--red)} #signalPanel.SHORT #vtext{color:var(--red)}
+  #signalPanel.TP{border-color:var(--green)} #signalPanel.TP #vtext{color:var(--green)}
+  #signalPanel.SL{border-color:var(--red)} #signalPanel.SL #vtext{color:var(--red)}
+  @keyframes pulseG{0%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}100%{box-shadow:0 0 0 22px rgba(34,197,94,0)}}
+  @keyframes pulseR{0%{box-shadow:0 0 0 0 rgba(239,68,68,.55)}100%{box-shadow:0 0 0 22px rgba(239,68,68,0)}}
+  #signalPanel.flashTP{animation:pulseG 1.1s ease-out 4}
+  #signalPanel.flashSL{animation:pulseR 1.1s ease-out 4}
   #vsub{font-size:11px;color:var(--dim);margin:2px 0 6px}
   .plan{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0}
   .plan div{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px}
@@ -212,14 +218,28 @@ function recompute(){
     return after.length ? Object.assign({}, s, LS.track_outcome(s, after))
                         : Object.assign({}, s, { outcome: null, r: null });
   });
+  // detect newly resolved trades -> pulse the result banner (no flash on first load)
+  const cur = {};
+  let justResolved = null;
+  for(const s of signalsToday){
+    cur[s.signal_at] = s.outcome || null;
+    if(prevOutcomes && s.outcome && !prevOutcomes[s.signal_at]) justResolved = s.signal_at;
+  }
+  if(justResolved) flashSig = justResolved;
+  prevOutcomes = cur;
   render(nowMs, m1c, h1c, h4c);
 }
 
 function activeSignal(nowMs){
+  // freshest signal first (by time) — the one the trader is watching
   const cutoff = nowMs - FRESH_MIN * 60000;
-  const fresh = signalsToday.filter(s => Date.parse(s.signal_at) >= cutoff);
+  const fresh = signalsToday.filter(s => Date.parse(s.signal_at) >= cutoff)
+    .sort((a, b) => Date.parse(b.signal_at) - Date.parse(a.signal_at));
   return fresh.length ? fresh[0] : null;
 }
+
+let prevOutcomes = null;   // signal_at -> outcome; null until first compute
+let flashSig = null;       // signal_at of a just-resolved trade (pulse banner)
 
 /* ---------------- panels ---------------- */
 function poolRow(p){
@@ -239,19 +259,30 @@ function renderPanels(nowMs, h1c, h4c){
 
   const open = marketOpen(nowMs);
   const act = open ? activeSignal(nowMs) : null;
+  const done = act && act.outcome ? act : null;   // freshest signal already resolved
+  const live = act && !act.outcome ? act : null;  // trade still open
   const sp = $('signalPanel');
-  const verdict = act ? act.direction : 'WAIT';
-  sp.className = 'panel ' + verdict;
-  $('vtext').textContent = verdict;
   const plan = $('plan');
-  if(act){
+  if(done){
+    const won = done.outcome === 'TP', lost = done.outcome === 'SL';
+    const cls = won ? 'TP' : lost ? 'SL' : 'WAIT';
+    const flash = flashSig === done.signal_at ? (won ? ' flashTP' : lost ? ' flashSL' : '') : '';
+    sp.className = 'panel ' + cls + flash;
+    $('vtext').textContent = won ? '🎯 TP HIT' : lost ? '🛑 SL HIT' : '⌛ EXPIRED';
+    plan.style.display = 'none';
+    $('vsub').textContent = done.direction + ' · ' + fmtT(Date.parse(done.signal_at)) + ' PKT · ' + done.session;
+    const rc = won ? 'var(--green)' : lost ? 'var(--red)' : 'var(--dim)';
+    $('reason').innerHTML = `entry ${done.entry.toFixed(2)} · SL ${done.sl.toFixed(2)} · TP ${done.tp.toFixed(2)} → <b style="color:${rc}">${done.r > 0 ? '+' : ''}${done.r}R</b>`;
+  } else if(live){
+    sp.className = 'panel ' + live.direction;
+    $('vtext').textContent = live.direction;
     plan.style.display = 'grid';
-    $('pEntry').textContent = act.entry.toFixed(2);
-    $('pSL').textContent = act.sl.toFixed(2);
-    $('pTP').textContent = act.tp.toFixed(2);
-    $('pRR').textContent = '1:' + act.rr.toFixed(2);
-    $('vsub').textContent = act.direction + ' · swept ' + fmtT(Date.parse(act.swept_at)) + ' PKT · ' + act.session;
-    $('reason').textContent = '💧 ' + act.reason;
+    $('pEntry').textContent = live.entry.toFixed(2);
+    $('pSL').textContent = live.sl.toFixed(2);
+    $('pTP').textContent = live.tp.toFixed(2);
+    $('pRR').textContent = '1:' + live.rr.toFixed(2);
+    $('vsub').textContent = live.direction + ' · swept ' + fmtT(Date.parse(live.swept_at)) + ' PKT · ' + live.session;
+    $('reason').textContent = '💧 ' + live.reason;
   } else {
     plan.style.display = 'none';
     const sess = open ? LS.session_of(nowMs) : null;
