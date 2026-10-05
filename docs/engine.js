@@ -36,7 +36,8 @@ const CONFIG = {
   m15_left: 5, m15_right: 5,          // 15m fractal for major swings
   confirm_body_ratio: 0.6,            // "good body": body >= 60% of candle range
   max_swing_signals_per_day: 4,       // separate daily cap for swing setups
-  swing_sl_buffer: 3.00,             // swing stops sit $3 beyond the extreme (backtest: $0.40 = -0.30R, $3 = +0.45R)
+  swing_sl_buffer: 1.00,             // swing stops sit $1 beyond the extreme (Mickey: 8-10 pip SL)
+  htf_match_tol: 1.00,               // 15m swing must sit within $1 of an H1/H4 fractal level (HTF confluence)
 
   use_trend_filter: false,          // DEFAULT OFF (backtest: destroys the edge)
 };
@@ -285,7 +286,7 @@ function liquidity_map(price, pools, n = 5) {
  *           TP1/TP2/TP3 = last three 15m swing lows.
  * LONG: mirrored at 15m swing lows. Closed candles only — no repaint.
  * -------------------------------------------------------------------------- */
-function detect_swings(m15bars, nowMs) {
+function detect_swings(m15bars, nowMs, htf) {
   const maxAge = nowMs - CONFIG.pool_max_age_days * DAY_MS;
   const [highs, lows] = fractals(m15bars, CONFIG.m15_left, CONFIG.m15_right);
   const swings = [];
@@ -311,8 +312,15 @@ function detect_swings(m15bars, nowMs) {
     }
   }
   for (const p of swings) p.premium = p.touches >= 2;
-  swings.sort((a, b) => a.formed_at - b.formed_at);
-  return swings.slice(-CONFIG.max_pools_per_tf).map(p => ({ ...p, price: round2(p.price) }));
+  // HTF confluence (Mickey's rule): keep only 15m swings sitting within
+  // htf_match_tol of a same-side H1/H4 fractal level. htf = {high:[], low:[]}.
+  let kept = swings;
+  if (htf) {
+    const tol = CONFIG.htf_match_tol;
+    kept = swings.filter(p => (htf[p.side] || []).some(lvl => Math.abs(p.price - lvl) <= tol));
+  }
+  kept.sort((a, b) => a.formed_at - b.formed_at);
+  return kept.slice(-CONFIG.max_pools_per_tf).map(p => ({ ...p, price: round2(p.price) }));
 }
 
 function build_swing_signals(m1bars, swings, nowMs, dayMs = null, usedIds = null) {
