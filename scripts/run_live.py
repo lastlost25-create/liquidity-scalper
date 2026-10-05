@@ -45,11 +45,18 @@ def main():
     h1 = fetch_twelve("1h", 500, api_key)
     h4 = cached_fetch(H4_CACHE, "4h", 500, api_key)
     payload = build_payload(m1, h1, h4, now)
+    # last 240 closed M1 candles for the on-page chart: [iso, o, h, l, c]
+    tail = m1.tail(240)
+    payload["candles"] = [
+        [t.isoformat(), round(float(r["open"]), 2), round(float(r["high"]), 2),
+         round(float(r["low"]), 2), round(float(r["close"]), 2)]
+        for t, r in tail.iterrows()
+    ]
     with open(out, "w") as f:
         json.dump(payload, f, indent=2)
     print(f"wrote {out}: verdict={payload['verdict']} price={payload['price']:.2f} "
           f"signals={len(payload['signals_today'])} session={payload['session']} "
-          f"trend={payload['trend_h1']}")
+          f"trend={payload['trend_h1']} candles={len(payload['candles'])}")
 
 
 if __name__ == "__main__":
