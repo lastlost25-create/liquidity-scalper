@@ -12,10 +12,12 @@ name: update-signals
 #   every 5 min = 288 runs/day; M1 (1 cr) + H1 (1 cr) per run, H4 cached hourly.
 #   XAUUSD only — no silver.  => ~600 credits/day. Safely under the limit.
 
+# Live data now comes from the client-side engine in docs/index.html
+# (Binance PAXG public feed, tick-live, no API key). The scheduled run is
+# disabled so it no longer spends Twelve Data credits; keep manual dispatch
+# for on-demand regeneration of the legacy signals.json.
 on:
-  schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch: {}  # manual "Run workflow" button
+  workflow_dispatch: {}  # manual "Run workflow" button only
 
 permissions:
   contents: write
