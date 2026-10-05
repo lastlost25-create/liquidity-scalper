@@ -23,7 +23,7 @@ const CONFIG = {
   // Sweep detection (on closed M1 candles)
   sweep_pierce: 0.50,               // wick must pierce pool by >= $0.50
   sl_buffer: 0.40,                  // SL sits $0.40 beyond the sweep extreme
-  min_rr: 1.5,                      // discard anything under 1.5R
+  min_rr: 2.5,                      // discard anything under 2.5R (raised 5 Oct 2026: backtest +0.664R -> +0.812R/trade)
   max_signals_per_day: 4,           // best 4 by R:R only
 
   // Session filter — killzones in UTC hours
