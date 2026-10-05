@@ -9,7 +9,7 @@ At a 5-minute cron this stays near ~600 credits/day (576 + ~24).
 XAUUSD liquidity only — no silver (removed 5 Oct 2026: backtest showed the
 silver confirmation adds nothing; user decision).
 
-Usage: python3 scripts/run_live.py site/signals.json
+Usage: python3 scripts/run_live.py docs/signals.json
 """
 import json
 import os
@@ -36,7 +36,7 @@ def cached_fetch(cache_path, interval, outputsize, api_key, symbol="XAU/USD"):
 
 
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else "site/signals.json"
+    out = sys.argv[1] if len(sys.argv) > 1 else "docs/signals.json"
     api_key = os.getenv("TWELVEDATA_API_KEY")
     if not api_key:
         raise SystemExit("Set TWELVEDATA_API_KEY (free key from https://twelvedata.com).")
