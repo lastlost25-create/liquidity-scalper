@@ -16,6 +16,9 @@
   #topbar h1{font-size:15px;letter-spacing:.5px;white-space:nowrap}
   #topbar h1 span{color:var(--gold)}
   #topbar .sym{font-size:11px;color:var(--dim);white-space:nowrap}
+  button.sym{background:none;border:1px solid #2a3348;border-radius:6px;padding:3px 8px;
+    cursor:pointer;font:inherit;color:var(--dim)}
+  button.sym:active{transform:scale(.96)}
   #price{font-size:22px;font-weight:800;font-family:ui-monospace,Menlo,monospace;
     margin-left:auto;white-space:nowrap}
   #price.tick-up{color:var(--green)} #price.tick-dn{color:var(--red)}
@@ -89,7 +92,7 @@
 
 <div id="topbar">
   <h1>⚡ LIQUIDITY <span>SCALPER</span></h1>
-  <span class="sym" id="symLabel">XAUUSD · 1m</span>
+  <button class="sym" id="symLabel" title="tap to switch feed">···</button>
   <span class="badge" id="fresh">···</span>
   <div id="price">–</div>
   <span class="badge" id="trend">H1 ···</span>
@@ -197,11 +200,38 @@ async function paxgKlines(interval, limit){
 }
 function applyFeedLabel(){
   if(FEED === 'yahoo'){
-    $('symLabel').textContent = 'XAUUSD · 1m';
-    $('feedNote').textContent = 'XAUUSD spot via Yahoo Finance · close to Exness/OANDA';
+    $('symLabel').innerHTML = 'XAUUSD · 1m <span style="opacity:.5">⇄</span>';
+    $('feedNote').textContent = 'XAUUSD spot via Yahoo Finance · close to Exness/OANDA · tap label to switch';
   } else {
-    $('symLabel').textContent = 'PAXG · 1m ≈ XAUUSD';
-    $('feedNote').textContent = 'PAXG feed (fallback) · tracks XAUUSD within a few $';
+    $('symLabel').innerHTML = 'PAXG · 1m ≈ XAUUSD <span style="opacity:.5">⇄</span>';
+    $('feedNote').textContent = 'PAXG feed (fallback) · tracks XAUUSD within a few $ · tap label to switch';
+  }
+}
+
+/* Manual feed toggle (tap the top-bar label) */
+async function attemptYahooNow(){
+  if(FEED !== 'paxg') return false;
+  try {
+    const m1 = await yahooKlines('1m', '1d');
+    if(m1.length < 30) throw new Error('thin yahoo');
+    const h1 = await yahooKlines('1h', '1mo');
+    if(yahooRetryTimer){ clearInterval(yahooRetryTimer); yahooRetryTimer = null; }
+    if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+    try { ws.close(); } catch(e){}
+    M1 = m1; H1 = h1; H4 = resample4h(h1);
+    FEED = 'yahoo'; wsFails = 0; yahooFails = 0;
+    applyFeedLabel();
+    recompute();
+    setFresh('live');
+    pollTimer = setInterval(yahooPoll, 20000);
+    return true;
+  } catch(e){ return false; }
+}
+function toggleFeed(){
+  if(FEED === 'yahoo'){ switchToPaxg(); }
+  else if(FEED === 'paxg'){
+    setFresh('connecting');
+    attemptYahooNow().then(ok => { if(!ok) setFresh('live'); });
   }
 }
 
@@ -495,20 +525,7 @@ function scheduleYahooRecovery(){
   if(yahooRetryTimer) return;
   yahooRetryTimer = setInterval(async () => {
     if(FEED !== 'paxg'){ clearInterval(yahooRetryTimer); yahooRetryTimer = null; return; }
-    try {
-      const m1 = await yahooKlines('1m', '1d');
-      if(m1.length < 30) throw new Error('thin yahoo');
-      const h1 = await yahooKlines('1h', '1mo');
-      clearInterval(yahooRetryTimer); yahooRetryTimer = null;
-      if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
-      try { ws.close(); } catch(e){}
-      M1 = m1; H1 = h1; H4 = resample4h(h1);
-      FEED = 'yahoo'; wsFails = 0; yahooFails = 0;
-      applyFeedLabel();
-      recompute();
-      setFresh('live');
-      pollTimer = setInterval(yahooPoll, 20000);
-    } catch(e){ /* stay on PAXG, try again in 5 min */ }
+    await attemptYahooNow();   /* stays on PAXG on failure, tries again in 5 min */
   }, 5 * 60 * 1000);
 }
 
@@ -652,6 +669,7 @@ async function boot(){
     const [nowMs, m1c, h1c, h4c] = closedView();
     render(nowMs, m1c, h1c, h4c);
   });
+  $('symLabel').addEventListener('click', toggleFeed);
 }
 boot();
 </script>
