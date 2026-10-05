@@ -371,7 +371,9 @@ function drawChart(nowMs){
   let lo = Infinity, hi = -Infinity;
   const consider = v => { if(v < lo) lo = v; if(v > hi) hi = v; };
   candles.forEach(k => { consider(k.l); consider(k.h); });
-  pools.forEach(p => consider(p.price));
+  const price0 = M1[M1.length-1].c;
+  const pmap = LS.liquidity_map(price0, pools);   // only drawn pools set the axis
+  pmap.above.concat(pmap.below).forEach(p => consider(p.price));
   const act = marketOpen(nowMs) ? activeSignal(nowMs) : null;
   if(act) [act.entry, act.sl, act.tp].forEach(consider);
   if(!isFinite(lo)){ lo = 4100; hi = 4200; }
@@ -398,10 +400,9 @@ function drawChart(nowMs){
     c.fillStyle = edge || '#6b7488';
     c.fillText(p.tf + (p.premium ? ' ★' : ''), 6, (y1 + y2) / 2 - 4);
   };
-  const price = M1[M1.length-1].c;
-  const map = LS.liquidity_map(price, pools);
-  map.above.forEach(p => band(p, 'rgba(239,68,68,.08)', p.premium ? '#d4a93c' : null));
-  map.below.forEach(p => band(p, 'rgba(34,197,94,.08)', p.premium ? '#d4a93c' : null));
+  const price = price0;
+  pmap.above.forEach(p => band(p, 'rgba(239,68,68,.08)', p.premium ? '#d4a93c' : null));
+  pmap.below.forEach(p => band(p, 'rgba(34,197,94,.08)', p.premium ? '#d4a93c' : null));
 
   const n = candles.length, cw = pw / n;
   for(let i = 0; i < n; i++){
