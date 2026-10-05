@@ -27,7 +27,7 @@
   .badge.warn{color:var(--gold);border-color:var(--gold)}
   #stage{position:relative;flex:1 1 auto;min-height:0}
   #chartWrap{position:absolute;inset:0}
-  #chart{position:absolute;inset:0}
+  #chart{position:absolute;inset:0;touch-action:none}
   .panel{position:absolute;background:rgba(13,18,27,.92);border:1px solid var(--line);
     border-radius:10px;padding:10px 12px;z-index:10;backdrop-filter:blur(3px);
     font-size:12px;box-shadow:0 4px 18px rgba(0,0,0,.45)}
@@ -334,7 +334,7 @@ function drawChart(nowMs){
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.clearRect(0, 0, W, H);
 
-  const candles = M1.slice(-240);
+  const candles = M1.slice(-viewCount);
   const AXW = 60, AXH = 22;
   const pw = W - AXW, ph = H - AXH;
   let lo = Infinity, hi = -Infinity;
@@ -386,7 +386,8 @@ function drawChart(nowMs){
   }
 
   c.fillStyle = '#5b6478';
-  for(let i = 0; i < n; i += 30){
+  const labStep = n > 150 ? 30 : n > 80 ? 15 : 5;
+  for(let i = 0; i < n; i += labStep){
     c.fillText(fmtT(candles[i].t), i * cw + cw / 2 - 14, H - 7);
   }
 
@@ -504,6 +505,43 @@ async function refreshHigherTFs(){
     recompute();
   } catch(e){}
 }
+
+/* ---------------- chart gestures: pinch / wheel zoom, double-tap reset ---------------- */
+let viewCount = 240;                       // visible candles, anchored to the live edge
+const VIEW_MIN = 40, VIEW_MAX = 600;
+function applyZoom(factor){
+  viewCount = Math.min(VIEW_MAX, Math.max(VIEW_MIN, Math.round(viewCount / factor)));
+  drawChart(Date.now());
+}
+(function initGestures(){
+  const cv = $('chart');
+  const pts = new Map();
+  let pinchD = 0, lastTap = 0;
+  const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+  cv.addEventListener('pointerdown', e => {
+    const now = Date.now();
+    if(pts.size === 0 && now - lastTap < 300){ viewCount = 240; drawChart(now); }  // double-tap resets
+    lastTap = now;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if(pts.size === 2) pinchD = dist();
+  });
+  cv.addEventListener('pointermove', e => {
+    if(!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if(pts.size === 2){
+      const d = dist();
+      if(pinchD > 0 && d > 0) applyZoom(d / pinchD);
+      pinchD = d;
+    }
+  });
+  const up = e => { pts.delete(e.pointerId); if(pts.size < 2) pinchD = 0; };
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    applyZoom(e.deltaY < 0 ? 1.18 : 1 / 1.18);
+  }, { passive: false });
+})();
 
 async function boot(){
   /* Primary: Yahoo XAUUSD spot (closest free match to Exness/OANDA).
