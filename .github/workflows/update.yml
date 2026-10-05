@@ -6,7 +6,7 @@ name: update-signals
 # One-time setup (see README.md):
 #   1. Get a free API key at https://twelvedata.com (lifetime free tier)
 #   2. Repo Settings -> Secrets -> Actions -> add TWELVEDATA_API_KEY
-#   3. Repo Settings -> Pages -> Source: "GitHub Actions"
+#   3. Repo Settings -> Pages -> Source: Deploy from a branch, main, /site
 #
 # Credit math (Twelve Data free = 800 credits/day):
 #   every 5 min = 288 runs/day; M1 (1 cr) + H1 (1 cr) per run, H4 cached hourly.
@@ -56,16 +56,5 @@ jobs:
           git add site/signals.json
           git diff --cached --quiet || git commit -m "signals update $(date -u +%FT%TZ)"
           git push
-
-  deploy:
-    needs: engine
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site/
-      - uses: actions/deploy-pages@v4
+          # Pages serves the /site folder straight from the branch, so the
+          # commit above is all it takes — no separate deploy job needed.
