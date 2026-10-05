@@ -3,7 +3,7 @@
 A free, 1-page signal dashboard for **pure price-action liquidity-sweep scalping** on gold.
 No indicators anywhere — no EMA, RSI, ATR. Only raw candle structure.
 
-**Live demo page:** `site/index.html` + `site/signals.json` (open `index.html` in any browser)
+**Live demo page:** `docs/index.html` + `docs/signals.json` (open `index.html` in any browser)
 
 ---
 
@@ -79,7 +79,7 @@ liquidity-tool/
 │   ├── RESULTS.md     # backtest report: 3-month XAUUSD sweep-only validation
 │   └── data/          # XAUUSD M1 CSVs here (e.g. xau_1m.csv)
 │                       # columns: time,open,high,low,close (UTC)
-├── site/
+├── docs/
 │   ├── index.html     # the 1-page dashboard (8 KB, no frameworks, mobile-first)
 │   └── signals.json   # engine output, refreshed by the Action / sample for now
 ├── scripts/
