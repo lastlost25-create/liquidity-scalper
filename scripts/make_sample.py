@@ -13,7 +13,7 @@ from engine import build_payload, track_outcome
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 M1_PATH = os.path.join(BASE, "backtest", "data", "xau_1m.csv")
-OUT = os.path.join(BASE, "site", "signals.json")
+OUT = os.path.join(BASE, "docs", "signals.json")
 
 
 def load(path):
@@ -45,6 +45,13 @@ payload["sample"] = True
 payload["sample_note"] = ("SAMPLE — generated from Twelve Data XAU/USD spot 1m history. "
                           "Live engine overwrites this via GitHub Actions once "
                           "TWELVEDATA_API_KEY is set.")
+# last 240 closed M1 candles for the on-page chart: [iso, o, h, l, c]
+tail = m1.tail(240)
+payload["candles"] = [
+    [t.isoformat(), round(float(r["open"]), 2), round(float(r["high"]), 2),
+     round(float(r["low"]), 2), round(float(r["close"]), 2)]
+    for t, r in tail.iterrows()
+]
 with open(OUT, "w") as f:
     json.dump(payload, f, indent=2)
 print(f"wrote {OUT}: verdict={payload['verdict']} signals={len(payload['signals_today'])} "
