@@ -1,9 +1,25 @@
-# ⚡ Liquidity Scalper — XAUUSD
+# ⚡ Liquidity Scalper — PAXG live (≈ XAUUSD)
 
 A free, 1-page signal dashboard for **pure price-action liquidity-sweep scalping** on gold.
 No indicators anywhere — no EMA, RSI, ATR. Only raw candle structure.
 
-**Live demo page:** `docs/index.html` + `docs/signals.json` (open `index.html` in any browser)
+**Live page:** https://lastlost25-create.github.io/liquidity-scalper/
+(`docs/index.html` + `docs/engine.js` — open `index.html` in any browser)
+
+## How it stays live and free (no server, no API key)
+
+Everything runs **in the visitor's browser**:
+- **Feed:** Binance public market data (`data-api.binance.vision` REST for history,
+  `data-stream.binance.vision` websocket for tick-live M1 candles). No key, no account.
+  If the websocket is blocked on a network, the page falls back to REST polling every 15s.
+- **Engine:** `docs/engine.js` — a JavaScript port of `engine/engine.py`, verified to
+  produce **bit-identical signals** (14/14 match on 5 test dates of Twelve Data XAUUSD).
+- **Symbol note:** the live feed is **PAXGUSDT** (PAX Gold), which tracks XAUUSD spot
+  within a few dollars. All levels, sweeps, entries, stops and targets are computed
+  from this one feed, so every signal is internally consistent — but quotes can differ
+  slightly from your broker's XAUUSD. Demo-test before real money.
+- The old GitHub Actions 5-minute updater is retired (its cron is disabled);
+  `docs/signals.json` remains only as a legacy artifact.
 
 ---
 
