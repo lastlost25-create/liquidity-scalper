@@ -86,6 +86,7 @@
 <div id="topbar">
   <h1>⚡ LIQUIDITY <span>SCALPER</span></h1>
   <span class="sym">XAUUSD · M1</span>
+  <span class="badge" id="fresh">···</span>
   <span class="badge sample" id="sampleBadge" style="display:none">SAMPLE</span>
   <div id="price">–</div>
   <span class="badge" id="trend">H1 ···</span>
@@ -192,6 +193,16 @@ function renderPanels(d){
 
   document.getElementById('updated').textContent =
     'updated ' + fmtD(d.updated_at) + ' PKT · refreshes 60s';
+  freshness();
+}
+
+/* data-freshness badge: green LIVE if engine wrote <8 min ago */
+function freshness(){
+  if(!DATA) return;
+  const ageMin = (Date.now() - new Date(DATA.updated_at).getTime()) / 60000;
+  const fb = document.getElementById('fresh');
+  if(ageMin < 8){ fb.textContent = '● LIVE'; fb.className = 'badge on'; }
+  else { fb.textContent = '○ ' + Math.round(ageMin) + 'm old'; fb.className = 'badge'; }
 }
 
 /* ── native candlestick chart ───────────────── */
@@ -294,6 +305,7 @@ async function load(){
 window.addEventListener('resize', () => { if(DATA) drawChart(DATA); });
 load();
 setInterval(load, 60000);
+setInterval(freshness, 30000);
 </script>
 </body>
 </html>
