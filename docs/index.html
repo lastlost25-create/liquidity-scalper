@@ -256,9 +256,18 @@ function recompute(){
                         : Object.assign({}, s, { outcome: null, r: null });
   });
   // swing setups: 15m major swings + M1 sweep + confirmation
+  // Mickey's rule: only 15m swings sitting on H1/H4 liquidity (HTF confluence)
   if(M15.length >= 30){
     const m15c = LS.closed_only(M15, nowMs);
-    swings = LS.detect_swings(m15c, nowMs);
+    const htf = { high: [], low: [] };
+    for (const [bars, L, R] of [[h1c, LS.CONFIG.h1_left, LS.CONFIG.h1_right],
+                                [h4c, LS.CONFIG.h4_left, LS.CONFIG.h4_right]]) {
+      if (!bars || !bars.length) continue;
+      const [hs, ls] = LS.fractals(bars, L, R);
+      for (const [, p] of hs) htf.high.push(p);
+      for (const [, p] of ls) htf.low.push(p);
+    }
+    swings = LS.detect_swings(m15c, nowMs, htf);
     const swr = LS.build_swing_signals(m1c, swings, nowMs);
     swingSignalsToday = swr.signals.map(s => {
       const after = m1c.filter(b => b.t > Date.parse(s.signal_at));
