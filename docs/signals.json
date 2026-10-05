@@ -1,8 +1,8 @@
 {
   "engine": "liquidity-scalper",
   "symbol": "XAUUSD",
-  "updated_at": "2026-10-05T12:01:55.004059+00:00",
-  "price": 4156.19,
+  "updated_at": "2026-10-05T12:05:20.705236+00:00",
+  "price": 4155.28,
   "session": "NewYork",
   "session_active": true,
   "trend_h1": "RANGE",
@@ -37,7 +37,7 @@
         "price": 4165.63,
         "touches": 1,
         "premium": false,
-        "distance": 9.44
+        "distance": 10.35
       },
       {
         "id": "H1-high-16",
@@ -46,7 +46,7 @@
         "price": 4171.19,
         "touches": 1,
         "premium": false,
-        "distance": 15.0
+        "distance": 15.91
       },
       {
         "id": "H1-high-17",
@@ -55,7 +55,7 @@
         "price": 4187.42,
         "touches": 2,
         "premium": true,
-        "distance": 31.23
+        "distance": 32.14
       },
       {
         "id": "H4-high-57",
@@ -64,7 +64,7 @@
         "price": 4192.52,
         "touches": 1,
         "premium": false,
-        "distance": 36.33
+        "distance": 37.24
       },
       {
         "id": "H1-high-19",
@@ -73,7 +73,7 @@
         "price": 4192.52,
         "touches": 1,
         "premium": false,
-        "distance": 36.33
+        "distance": 37.24
       }
     ],
     "below": [
@@ -84,7 +84,7 @@
         "price": 4150.03,
         "touches": 1,
         "premium": false,
-        "distance": 6.16
+        "distance": 5.25
       },
       {
         "id": "H1-low-41",
@@ -93,7 +93,7 @@
         "price": 4147.23,
         "touches": 1,
         "premium": false,
-        "distance": 8.96
+        "distance": 8.05
       },
       {
         "id": "H1-low-39",
@@ -102,7 +102,7 @@
         "price": 4142.2,
         "touches": 1,
         "premium": false,
-        "distance": 13.99
+        "distance": 13.08
       },
       {
         "id": "H4-low-66",
@@ -111,7 +111,7 @@
         "price": 4139.78,
         "touches": 1,
         "premium": false,
-        "distance": 16.41
+        "distance": 15.5
       },
       {
         "id": "H1-low-42",
@@ -120,34 +120,13 @@
         "price": 4139.78,
         "touches": 1,
         "premium": false,
-        "distance": 16.41
+        "distance": 15.5
       }
     ]
   },
   "pool_count": 50,
   "disclaimer": "Educational use only. Not financial advice. Trade on demo first.",
   "candles": [
-    [
-      "2026-10-05T08:01:00+00:00",
-      4161.76,
-      4162.65,
-      4159.24,
-      4159.68
-    ],
-    [
-      "2026-10-05T08:02:00+00:00",
-      4160.57,
-      4163.54,
-      4160.57,
-      4163.18
-    ],
-    [
-      "2026-10-05T08:03:00+00:00",
-      4162.65,
-      4163.72,
-      4162.65,
-      4163.62
-    ],
     [
       "2026-10-05T08:04:00+00:00",
       4163.26,
@@ -1806,6 +1785,27 @@
       4156.51,
       4154.98,
       4156.19
+    ],
+    [
+      "2026-10-05T12:01:00+00:00",
+      4155.32,
+      4156.97,
+      4155.32,
+      4156.8
+    ],
+    [
+      "2026-10-05T12:02:00+00:00",
+      4156.47,
+      4156.71,
+      4155.79,
+      4155.99
+    ],
+    [
+      "2026-10-05T12:03:00+00:00",
+      4156.35,
+      4156.85,
+      4154.97,
+      4155.28
     ]
   ]
 }
