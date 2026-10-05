@@ -2,213 +2,298 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Liquidity Scalper · XAUUSD</title>
 <style>
   :root{--bg:#0a0e14;--card:#11161f;--line:#1e2634;--txt:#e6eaf2;--dim:#8b94a7;
     --green:#22c55e;--red:#ef4444;--gold:#d4a93c;--blue:#3b82f6}
   *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
   body{background:var(--bg);color:var(--txt);font-family:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;
-    max-width:560px;margin:0 auto;padding:12px;-webkit-font-smoothing:antialiased}
-  header{display:flex;justify-content:space-between;align-items:center;padding:8px 4px 12px}
-  header h1{font-size:17px;letter-spacing:.5px}
-  header h1 span{color:var(--gold)}
-  .badge{font-size:11px;padding:4px 10px;border-radius:20px;background:var(--card);border:1px solid var(--line);color:var(--dim)}
+    display:flex;flex-direction:column;overflow:hidden;-webkit-font-smoothing:antialiased}
+  /* ── top bar ─────────────────────────────── */
+  #topbar{display:flex;align-items:center;gap:10px;padding:8px 12px;
+    background:var(--card);border-bottom:1px solid var(--line);flex:0 0 auto;z-index:20}
+  #topbar h1{font-size:15px;letter-spacing:.5px;white-space:nowrap}
+  #topbar h1 span{color:var(--gold)}
+  #topbar .sym{font-size:11px;color:var(--dim);white-space:nowrap}
+  #price{font-size:22px;font-weight:800;font-family:ui-monospace,Menlo,monospace;
+    margin-left:auto;white-space:nowrap}
+  .badge{font-size:10px;padding:3px 9px;border-radius:20px;background:var(--bg);
+    border:1px solid var(--line);color:var(--dim);white-space:nowrap}
   .badge.on{color:var(--green);border-color:var(--green)}
   .badge.up{color:var(--green);border-color:var(--green)}
   .badge.dn{color:var(--red);border-color:var(--red)}
-  .badges{display:flex;gap:6px}
-  #verdict{border-radius:14px;padding:22px 18px;text-align:center;margin-bottom:12px;
-    background:var(--card);border:1px solid var(--line)}
-  #verdict .v{font-size:44px;font-weight:800;letter-spacing:2px;margin:6px 0}
-  #verdict.WAIT .v{color:var(--dim)} #verdict.LONG .v{color:var(--green)} #verdict.SHORT .v{color:var(--red)}
-  #verdict.LONG{border-color:var(--green)} #verdict.SHORT{border-color:var(--red)}
-  #verdict .dir{font-size:13px;color:var(--dim)}
-  .plan{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
-  .plan div{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}
-  .plan small{display:block;color:var(--dim);font-size:11px;margin-bottom:3px}
-  .plan b{font-size:17px;font-family:ui-monospace,Menlo,monospace}
-  #reason{font-size:13px;color:var(--gold);margin-top:8px;line-height:1.5}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
-  .card h2{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
-  .price{font-size:34px;font-weight:700;font-family:ui-monospace,Menlo,monospace}
-  .sil{display:flex;justify-content:space-between;align-items:center;font-size:13px}
-  .sil .p{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:20px}
-  .sil .t-up{color:var(--green);font-weight:700}.sil .t-dn{color:var(--red);font-weight:700}.sil .t-rg{color:var(--dim);font-weight:700}
-  .sil .ok{color:var(--green);font-weight:700}.sil .no{color:var(--red);font-weight:700}
-  .ctx{font-size:11px;color:var(--dim);margin-top:8px}
-  .pool{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .badge.sample{color:var(--gold);border-color:var(--gold)}
+  /* ── stage: full-screen chart + floating panels ── */
+  #stage{position:relative;flex:1 1 auto;min-height:0}
+  #chartWrap{position:absolute;inset:0}
+  #chart{position:absolute;inset:0}
+  .panel{position:absolute;background:rgba(13,18,27,.92);border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;z-index:10;backdrop-filter:blur(3px);
+    font-size:12px;box-shadow:0 4px 18px rgba(0,0,0,.45)}
+  .panel h2{font-size:10px;color:var(--dim);text-transform:uppercase;
+    letter-spacing:1px;margin-bottom:8px}
+  /* verdict panel — top left */
+  #signalPanel{top:10px;left:10px;max-width:305px}
+  #vtext{font-size:30px;font-weight:800;letter-spacing:2px}
+  #signalPanel.WAIT #vtext{color:var(--dim)}
+  #signalPanel.LONG{border-color:var(--green)} #signalPanel.LONG #vtext{color:var(--green)}
+  #signalPanel.SHORT{border-color:var(--red)} #signalPanel.SHORT #vtext{color:var(--red)}
+  #vsub{font-size:11px;color:var(--dim);margin:2px 0 6px}
+  .plan{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0}
+  .plan div{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px}
+  .plan small{display:block;color:var(--dim);font-size:9px;margin-bottom:2px;letter-spacing:.5px}
+  .plan b{font-size:15px;font-family:ui-monospace,Menlo,monospace}
+  #pSL{color:var(--red)} #pTP{color:var(--green)} #pEntry{color:var(--blue)}
+  #reason{font-size:11px;color:var(--gold);line-height:1.45;margin-top:4px}
+  /* pools panel — top right */
+  #poolPanel{top:10px;right:10px;width:212px;max-height:46%;overflow-y:auto}
+  .pool{display:flex;justify-content:space-between;align-items:center;
+    padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}
   .pool:last-child{border-bottom:none}
-  .pool .p{font-family:ui-monospace,Menlo,monospace;font-weight:600}
-  .tag{font-size:10px;padding:2px 8px;border-radius:12px;background:var(--bg);border:1px solid var(--line);color:var(--dim)}
+  .pool .p{font-family:ui-monospace,Menlo,monospace;font-weight:700}
+  .tag{font-size:9px;padding:1px 7px;border-radius:12px;background:var(--bg);
+    border:1px solid var(--line);color:var(--dim);margin-left:4px;white-space:nowrap}
   .tag.prem{color:var(--gold);border-color:var(--gold)}
-  .dist{color:var(--dim);font-family:ui-monospace,Menlo,monospace}
-  table{width:100%;border-collapse:collapse;font-size:12px}
-  th{color:var(--dim);text-align:left;padding:6px 4px;font-weight:500;font-size:11px}
-  td{padding:8px 4px;border-top:1px solid var(--line);font-family:ui-monospace,Menlo,monospace}
+  .dist{color:var(--dim);font-family:ui-monospace,Menlo,monospace;font-size:10px}
+  /* log panel — bottom left */
+  #logPanel{left:10px;bottom:10px;max-width:340px;max-height:38%;overflow-y:auto}
+  #logPanel table{width:100%;border-collapse:collapse;font-size:11px}
+  #logPanel th{color:var(--dim);text-align:left;padding:4px;font-weight:500;font-size:10px}
+  #logPanel td{padding:5px 4px;border-top:1px solid var(--line);
+    font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
   .LONG{color:var(--green);font-weight:700}.SHORT{color:var(--red);font-weight:700}
   .win{color:var(--green)}.loss{color:var(--red)}
-  #updated{color:var(--dim);font-size:11px;text-align:center;padding:6px}
-  footer{color:var(--dim);font-size:11px;line-height:1.6;padding:14px 4px 30px;text-align:center}
-  .empty{color:var(--dim);font-size:13px;text-align:center;padding:12px}
+  .empty{color:var(--dim);font-size:11px;text-align:center;padding:8px}
+  #ctx{font-size:10px;color:var(--dim);margin-top:6px;line-height:1.5}
+  /* footer strip */
+  #foot{flex:0 0 auto;font-size:10px;color:var(--dim);text-align:center;
+    padding:5px 8px;border-top:1px solid var(--line);background:var(--card);z-index:20}
+  @media (max-width:700px){
+    #signalPanel{max-width:238px;padding:8px 10px}
+    #vtext{font-size:24px}
+    .plan b{font-size:13px}
+    #poolPanel{width:172px}
+    #logPanel{max-width:250px}
+    #topbar h1{font-size:13px}
+    #price{font-size:18px}
+  }
 </style>
 </head>
 <body>
-<header>
+
+<div id="topbar">
   <h1>⚡ LIQUIDITY <span>SCALPER</span></h1>
-  <div class="badges">
-    <div class="badge" id="trend">H1 ···</div>
-    <div class="badge" id="session">···</div>
-  </div>
-</header>
-
-<div id="verdict" class="WAIT">
-  <div class="dir">XAUUSD · M1 SWEEP ENGINE</div>
-  <div class="v" id="vtext">WAIT</div>
-  <div class="dir" id="vsub">scanning H4/H1 liquidity pools…</div>
-  <div class="plan" id="plan" style="display:none">
-    <div><small>ENTRY</small><b id="pEntry">–</b></div>
-    <div><small>STOP LOSS</small><b id="pSL">–</b></div>
-    <div><small>TAKE PROFIT</small><b id="pTP">–</b></div>
-    <div><small>R : R</small><b id="pRR">–</b></div>
-  </div>
-  <div id="reason"></div>
+  <span class="sym">XAUUSD · M1</span>
+  <span class="badge sample" id="sampleBadge" style="display:none">SAMPLE</span>
+  <div id="price">–</div>
+  <span class="badge" id="trend">H1 ···</span>
+  <span class="badge" id="session">···</span>
 </div>
 
-<div class="card" style="padding:0;overflow:hidden">
-  <h2 style="padding:14px 14px 0">XAUUSD chart <span style="text-transform:none">(live)</span></h2>
-  <div class="tradingview-widget-container" style="height:440px;width:100%">
-    <div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>
+<div id="stage">
+  <div id="chartWrap"><canvas id="chart"></canvas></div>
+
+  <div class="panel WAIT" id="signalPanel">
+    <h2>Signal</h2>
+    <div id="vtext">WAIT</div>
+    <div id="vsub">loading…</div>
+    <div class="plan" id="plan" style="display:none">
+      <div><small>ENTRY</small><b id="pEntry">–</b></div>
+      <div><small>STOP LOSS</small><b id="pSL">–</b></div>
+      <div><small>TAKE PROFIT</small><b id="pTP">–</b></div>
+      <div><small>R : R</small><b id="pRR">–</b></div>
+    </div>
+    <div id="reason"></div>
+    <div id="ctx"></div>
   </div>
-  <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
-  {
-    "symbol": "OANDA:XAUUSD",
-    "interval": "1",
-    "timezone": "Asia/Karachi",
-    "theme": "dark",
-    "style": "1",
-    "locale": "en",
-    "hide_side_toolbar": true,
-    "allow_symbol_change": false,
-    "calendar": false,
-    "support_host": "https://www.tradingview.com"
-  }
-  </script>
-</div>
 
-<div class="card">
-  <h2>Live price <span style="text-transform:none">(latest M1 close)</span></h2>
-  <div class="price" id="price">–</div>
-</div>
+  <div class="panel" id="poolPanel">
+    <h2>Pools above</h2>
+    <div id="above"><div class="empty">…</div></div>
+    <h2 style="margin-top:8px">Pools below</h2>
+    <div id="below"><div class="empty">…</div></div>
+  </div>
 
-<div class="card">
-  <h2>📊 Market structure <span style="text-transform:none">(context — not a filter)</span></h2>
-  <div class="sil">
-    <span id="h1ctx">H1 trend: –</span>
-    <span class="ctx" id="h4ctx">H4 regime: –</span>
+  <div class="panel" id="logPanel">
+    <h2>Today's signals</h2>
+    <table>
+      <thead><tr><th>TIME</th><th>DIR</th><th>ENTRY</th><th>R:R</th><th>RESULT</th></tr></thead>
+      <tbody id="log"><tr><td colspan="5" class="empty">…</td></tr></tbody>
+    </table>
   </div>
 </div>
 
-<div class="card">
-  <h2>Liquidity map — pools above</h2>
-  <div id="above"><div class="empty">loading…</div></div>
-</div>
-<div class="card">
-  <h2>Liquidity map — pools below</h2>
-  <div id="below"><div class="empty">loading…</div></div>
-</div>
-
-<div class="card">
-  <h2>Today's signals</h2>
-  <table>
-    <thead><tr><th>TIME (PKT)</th><th>DIR</th><th>ENTRY</th><th>R:R</th><th>RESULT</th></tr></thead>
-    <tbody id="log"><tr><td colspan="5" class="empty">loading…</td></tr></tbody>
-  </table>
-</div>
-
-<div id="updated">–</div>
-
-<footer>
-  ⚠️ Educational use only — not financial advice.<br>
-  Liquidity sweeps fail. Always use a stop loss. Trade on demo first.<br>
-  Engine: closed candles only · no repaint · no indicators · pure liquidity.
-</footer>
+<div id="foot">⚠️ Educational only — not financial advice · closed candles, no repaint, no indicators ·
+  <span id="updated">–</span></div>
 
 <script>
 const PKT = 'Asia/Karachi';
 const fmtT = iso => new Date(iso).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:PKT});
 const fmtD = iso => new Date(iso).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:PKT});
+let DATA = null;
 
+/* ── panels ─────────────────────────────────── */
 function poolRow(p){
-  const side = p.side==='high' ? '🔴 buy-side' : '🟢 sell-side';
-  return `<div class="pool"><span class="p">${p.price.toLocaleString('en-US',{minimumFractionDigits:2})}</span>
-    <span><span class="tag">${p.tf}</span> <span class="tag ${p.premium?'prem':''}">${p.premium?'★ premium':'pool'}</span></span>
-    <span class="dist">$${p.distance.toFixed(2)}</span></div>`;
+  return `<div class="pool"><span class="p">${p.price.toFixed(2)}</span>`
+    + `<span><span class="tag">${p.tf}</span><span class="tag ${p.premium?'prem':''}">${p.premium?'★':'pool'}</span></span>`
+    + `<span class="dist">$${p.distance.toFixed(2)}</span></div>`;
 }
-
-function render(d){
-  const v = document.getElementById('verdict');
-  v.className = d.verdict;
+function renderPanels(d){
+  const sp = document.getElementById('signalPanel');
+  sp.className = 'panel ' + d.verdict;
   document.getElementById('vtext').textContent = d.verdict;
   document.getElementById('price').textContent =
     '$' + d.price.toLocaleString('en-US',{minimumFractionDigits:2});
+  document.getElementById('sampleBadge').style.display = d.sample ? '' : 'none';
 
   const sb = document.getElementById('session');
-  if(d.session_active){ sb.textContent = '● ' + d.session + ' KILLZONE'; sb.classList.add('on'); }
-  else { sb.textContent = '○ OFF-SESSION'; sb.classList.remove('on'); }
-
+  if(d.session_active){ sb.textContent = '● ' + d.session; sb.classList.add('on'); }
+  else { sb.textContent = '○ OFF'; sb.classList.remove('on'); }
   const tb = document.getElementById('trend');
-  tb.textContent = 'H1 · ' + (d.trend_h1 || '···');
+  tb.textContent = 'H1 ' + (d.trend_h1 || '···');
   tb.classList.remove('up','dn');
   if(d.trend_h1 === 'UPTREND') tb.classList.add('up');
   else if(d.trend_h1 === 'DOWNTREND') tb.classList.add('dn');
 
-  const h1c = document.getElementById('h1ctx');
-  const tCls = d.trend_h1 === 'UPTREND' ? 't-up' : d.trend_h1 === 'DOWNTREND' ? 't-dn' : 't-rg';
-  h1c.innerHTML = `H1 trend: <span class="${tCls}">${d.trend_h1 || '–'}</span>`;
-  document.getElementById('h4ctx').textContent =
-    'H4 regime: ' + (d.h4_regime || '–') + ' (context — not a filter)';
-
-  const s = d.active_signal;
-  const plan = document.getElementById('plan');
+  const s = d.active_signal, plan = document.getElementById('plan');
   if(s){
     plan.style.display = 'grid';
     document.getElementById('pEntry').textContent = s.entry.toFixed(2);
     document.getElementById('pSL').textContent = s.sl.toFixed(2);
     document.getElementById('pTP').textContent = s.tp.toFixed(2);
-    document.getElementById('pRR').textContent = '1 : ' + s.rr.toFixed(2);
-    document.getElementById('vsub').textContent = 'swept ' + fmtT(s.swept_at) + ' PKT · ' + s.session + ' session';
+    document.getElementById('pRR').textContent = '1:' + s.rr.toFixed(2);
+    document.getElementById('vsub').textContent =
+      s.direction + ' · swept ' + fmtT(s.swept_at) + ' PKT · ' + s.session;
     document.getElementById('reason').textContent = '💧 ' + s.reason;
   } else {
     plan.style.display = 'none';
     document.getElementById('vsub').textContent = d.session_active
-      ? 'in killzone — strict filters active' : 'outside killzones — pools still mapped, no signals';
+      ? 'in killzone — strict filters active' : 'outside killzones — no signals';
     document.getElementById('reason').textContent = d.wait_reason ? '⏳ ' + d.wait_reason : '';
   }
+  document.getElementById('ctx').textContent =
+    'H1 ' + (d.trend_h1||'–') + ' · H4 ' + (d.h4_regime||'–') + ' (context)';
 
   document.getElementById('above').innerHTML =
-    d.liquidity_map.above.map(poolRow).join('') || '<div class="empty">no pools above</div>';
+    d.liquidity_map.above.map(poolRow).join('') || '<div class="empty">none</div>';
   document.getElementById('below').innerHTML =
-    d.liquidity_map.below.map(poolRow).join('') || '<div class="empty">no pools below</div>';
+    d.liquidity_map.below.map(poolRow).join('') || '<div class="empty">none</div>';
 
   const log = d.signals_today || [];
-  document.getElementById('log').innerHTML = log.length ? log.map(x=>{
-    const oc = x.outcome ? `<span class="${x.outcome==='TP'?'win':'loss'}">${x.outcome} ${x.r>0?'+':''}${x.r}R</span>` : '<span style="color:var(--dim)">open</span>';
-    return `<tr><td>${fmtT(x.signal_at)}</td><td class="${x.direction}">${x.direction}</td>
-      <td>${x.entry.toFixed(2)}</td><td>1:${x.rr.toFixed(1)}</td><td>${oc}</td></tr>`;
-  }).join('') : '<tr><td colspan="5" class="empty">no signals yet today — strict filter, this is normal</td></tr>';
+  document.getElementById('log').innerHTML = log.length ? log.map(x => {
+    const oc = x.outcome
+      ? `<span class="${x.outcome==='TP'?'win':'loss'}">${x.outcome} ${x.r>0?'+':''}${x.r}R</span>`
+      : '<span style="color:var(--dim)">open</span>';
+    return `<tr><td>${fmtT(x.signal_at)}</td><td class="${x.direction}">${x.direction}</td>`
+      + `<td>${x.entry.toFixed(2)}</td><td>1:${x.rr.toFixed(1)}</td><td>${oc}</td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="empty">no signals yet — strict filter, normal</td></tr>';
 
   document.getElementById('updated').textContent =
-    'updated ' + fmtD(d.updated_at) + ' PKT · refreshes every 60s';
+    'updated ' + fmtD(d.updated_at) + ' PKT · refreshes 60s';
+}
+
+/* ── native candlestick chart ───────────────── */
+function drawChart(d){
+  const wrap = document.getElementById('chartWrap');
+  const cv = document.getElementById('chart');
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  if(!W || !H) return;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const c = cv.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, H);
+
+  const candles = d.candles || [];
+  const AXW = 60, AXH = 22;                 // price axis / time axis
+  const pw = W - AXW, ph = H - AXH;
+  let lo = Infinity, hi = -Infinity;
+  const consider = v => { if(v < lo) lo = v; if(v > hi) hi = v; };
+  candles.forEach(k => { consider(k[3]); consider(k[2]); });
+  [...d.liquidity_map.above, ...d.liquidity_map.below].forEach(p => consider(p.price));
+  const s = d.active_signal;
+  if(s) [s.entry, s.sl, s.tp].forEach(consider);
+  if(!isFinite(lo)){ lo = d.price - 5; hi = d.price + 5; }
+  const pad = ((hi - lo) * 0.10) || 1;
+  lo -= pad; hi += pad;
+  const y = v => ph - (v - lo) / (hi - lo) * ph;
+
+  // grid + price labels
+  c.lineWidth = 1; c.font = '10px system-ui';
+  for(let i = 0; i <= 5; i++){
+    const v = lo + (hi - lo) * i / 5, yy = Math.round(y(v)) + .5;
+    c.strokeStyle = '#141b28';
+    c.beginPath(); c.moveTo(0, yy); c.lineTo(pw, yy); c.stroke();
+    c.fillStyle = '#5b6478'; c.fillText(v.toFixed(1), pw + 6, yy + 3);
+  }
+
+  // liquidity pool bands (±$0.30)
+  const band = (p, fill, edge) => {
+    const y1 = y(p.price + .30), y2 = y(p.price - .30);
+    c.fillStyle = fill; c.fillRect(0, y1, pw, y2 - y1);
+    if(edge){
+      c.strokeStyle = edge; c.setLineDash([5, 4]); c.lineWidth = 1.2;
+      c.beginPath(); c.moveTo(0, (y1+y2)/2); c.lineTo(pw, (y1+y2)/2); c.stroke();
+      c.setLineDash([]); c.lineWidth = 1;
+    }
+    c.fillStyle = edge || '#6b7488';
+    c.fillText(p.tf + (p.premium ? ' ★' : ''), 6, (y1 + y2) / 2 - 4);
+  };
+  d.liquidity_map.above.forEach(p => band(p, 'rgba(239,68,68,.08)', p.premium ? '#d4a93c' : null));
+  d.liquidity_map.below.forEach(p => band(p, 'rgba(34,197,94,.08)', p.premium ? '#d4a93c' : null));
+
+  // candles
+  const n = candles.length, cw = n ? pw / n : pw;
+  for(let i = 0; i < n; i++){
+    const k = candles[i], o = k[1], hh = k[2], ll = k[3], cc = k[4];
+    const x = i * cw + cw / 2, bw = Math.max(1, cw * 0.62);
+    const col = cc >= o ? '#22c55e' : '#ef4444';
+    c.strokeStyle = col; c.fillStyle = col;
+    c.beginPath(); c.moveTo(x, y(hh)); c.lineTo(x, y(ll)); c.stroke();
+    const yO = y(o), yC = y(cc);
+    c.fillRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1, Math.abs(yC - yO)));
+  }
+
+  // time labels (PKT) every 30 bars
+  c.fillStyle = '#5b6478';
+  for(let i = 0; i < n; i += 30){
+    c.fillText(fmtT(candles[i][0]), i * cw + cw / 2 - 14, H - 7);
+  }
+
+  // horizontal level lines with price tags
+  const level = (v, color, label, dash) => {
+    const yy = Math.round(y(v)) + .5;
+    c.strokeStyle = color; c.lineWidth = 1.4;
+    c.setLineDash(dash || []); 
+    c.beginPath(); c.moveTo(0, yy); c.lineTo(pw, yy); c.stroke();
+    c.setLineDash([]); c.lineWidth = 1;
+    const txt = label + ' ' + v.toFixed(2);
+    c.fillStyle = color; c.fillRect(pw, yy - 9, AXW, 18);
+    c.fillStyle = '#0a0e14'; c.fillText(txt, pw + 4, yy + 3.5);
+  };
+  if(s){
+    level(s.tp, '#22c55e', 'TP');
+    level(s.entry, '#3b82f6', 'EN', [7, 5]);
+    level(s.sl, '#ef4444', 'SL');
+  }
+  level(d.price, '#d4a93c', '', [3, 4]);   // last price
 }
 
 async function load(){
   try{
-    const r = await fetch('signals.json?_=' + Date.now(), {cache:'no-store'});
-    render(await r.json());
-  }catch(e){ document.getElementById('updated').textContent = '⚠️ could not load signals.json'; }
+    const r = await fetch('signals.json?_=' + Date.now(), {cache: 'no-store'});
+    DATA = await r.json();
+    renderPanels(DATA);
+    drawChart(DATA);
+  }catch(e){
+    document.getElementById('updated').textContent = '⚠️ could not load signals.json';
+  }
 }
-load(); setInterval(load, 60000);
+window.addEventListener('resize', () => { if(DATA) drawChart(DATA); });
+load();
+setInterval(load, 60000);
 </script>
 </body>
 </html>
