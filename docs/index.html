@@ -581,9 +581,16 @@ async function refreshHigherTFs(){
 }
 
 /* ---------------- chart gestures: pinch / wheel zoom, double-tap reset ---------------- */
+function defaultViewCount(){
+  // keep candles ~5px wide so the chart stays readable on any screen
+  const pw = ($('chartWrap') ? $('chartWrap').clientWidth : 360) - 60;
+  return Math.max(40, Math.min(600, Math.round(pw / 5)));
+}
 let viewCount = 240;                       // visible candles, anchored to the live edge
+let userZoomed = false;                    // don't override a manual zoom on resize
 const VIEW_MIN = 40, VIEW_MAX = 600;
 function applyZoom(factor){
+  userZoomed = true;
   viewCount = Math.min(VIEW_MAX, Math.max(VIEW_MIN, Math.round(viewCount / factor)));
   drawChart(Date.now());
 }
@@ -594,7 +601,7 @@ function applyZoom(factor){
   const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
   cv.addEventListener('pointerdown', e => {
     const now = Date.now();
-    if(pts.size === 0 && now - lastTap < 300){ viewCount = 240; drawChart(now); }  // double-tap resets
+    if(pts.size === 0 && now - lastTap < 300){ viewCount = defaultViewCount(); userZoomed = false; drawChart(now); }  // double-tap resets
     lastTap = now;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if(pts.size === 2) pinchD = dist();
@@ -638,6 +645,7 @@ async function boot(){
     }
   }
   applyFeedLabel();
+  viewCount = defaultViewCount();   // readable candle width for this screen
   recompute();
   if(FEED === 'yahoo'){
     setFresh('live');
@@ -666,6 +674,7 @@ async function boot(){
     } catch(e){ setFresh('reconnecting'); }
   });
   window.addEventListener('resize', () => {
+    if(!userZoomed) viewCount = defaultViewCount();
     const [nowMs, m1c, h1c, h4c] = closedView();
     render(nowMs, m1c, h1c, h4c);
   });
