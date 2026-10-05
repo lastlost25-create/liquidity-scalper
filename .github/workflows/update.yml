@@ -47,13 +47,13 @@ jobs:
         run: |
           # H1/H4 are refreshed from cache-aware logic inside the run script:
           # M1 + H1 fetched every run, H4 re-fetched only if cache is older than 1h.
-          python3 scripts/run_live.py site/signals.json
+          python3 scripts/run_live.py docs/signals.json
 
       - name: Commit updated signals.json
         run: |
           git config user.name "liquidity-scalper"
           git config user.email "bot@liquidity-scalper.local"
-          git add site/signals.json
+          git add docs/signals.json
           git diff --cached --quiet || git commit -m "signals update $(date -u +%FT%TZ)"
           git push
           # Pages serves the /site folder straight from the branch, so the
