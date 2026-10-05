@@ -152,6 +152,7 @@ let FEED = null;                     // 'yahoo' | 'paxg'
 let M1 = [], H1 = [], H4 = [];       // M1 includes the forming candle last
 let pools = [], signalsToday = [];
 let ws = null, wsFails = 0, pollTimer = null, lastPrice = 0;
+let yahooFails = 0, yahooRetryTimer = null, lastWSMsg = 0;
 
 const $ = id => document.getElementById(id);
 const fmtT = ms => new Date(ms).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:PKT});
@@ -443,25 +444,81 @@ function mergeBars(bars){
   return M1.length !== before || added > 0;
 }
 
-/* Yahoo path: 20s REST polling (no websocket on this feed) */
+/* Yahoo path: 20s REST polling (no websocket on this feed).
+   3 consecutive failures (or stale data) -> switch to PAXG automatically. */
 async function yahooPoll(){
   try {
     const bars = await yahooKlines('1m', '1d');
     const lastT = M1.length ? M1[M1.length - 1].t : 0;
     const newest = bars[bars.length - 1];
     mergeBars(bars);
-    if(newest.t > lastT) recompute();
-    else { const [nowMs, m1c, h1c, h4c] = closedView(); render(nowMs, m1c, h1c, h4c); }
+    if(newest.t > lastT){ yahooFails = 0; recompute(); }
+    else {
+      if((Date.now() - lastT) / 60000 > 4) throw new Error('stale yahoo feed');
+      yahooFails = 0;
+      const [nowMs, m1c, h1c, h4c] = closedView(); render(nowMs, m1c, h1c, h4c);
+    }
     setFresh('live');
-  } catch(e){ setFresh('reconnecting'); }
+  } catch(e){
+    yahooFails++;
+    console.warn('yahoo poll fail #' + yahooFails, e);
+    if(yahooFails >= 3){ switchToPaxg(); return; }
+    setFresh('reconnecting');
+  }
+}
+
+/* Full feed switch Yahoo -> PAXG (mid-session recovery, mirrors boot fallback) */
+async function switchToPaxg(){
+  if(FEED === 'paxg') return;
+  if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+  try {
+    const [m1, h1, h4] = await Promise.all([
+      paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
+    if(!m1.length) throw new Error('empty paxg');
+    M1 = m1; H1 = h1; H4 = h4;
+    FEED = 'paxg'; yahooFails = 0; wsFails = 0;
+    applyFeedLabel();
+    recompute();
+    setFresh('live');
+    connectWS();
+    scheduleYahooRecovery();
+  } catch(e){
+    console.warn('paxg switch failed, retrying yahoo', e);
+    yahooFails = 0;
+    setFresh('reconnecting');
+    pollTimer = setInterval(yahooPoll, 20000);
+  }
+}
+
+/* While on PAXG, silently retry Yahoo every 5 min and switch back when healthy */
+function scheduleYahooRecovery(){
+  if(yahooRetryTimer) return;
+  yahooRetryTimer = setInterval(async () => {
+    if(FEED !== 'paxg'){ clearInterval(yahooRetryTimer); yahooRetryTimer = null; return; }
+    try {
+      const m1 = await yahooKlines('1m', '1d');
+      if(m1.length < 30) throw new Error('thin yahoo');
+      const h1 = await yahooKlines('1h', '1mo');
+      clearInterval(yahooRetryTimer); yahooRetryTimer = null;
+      if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+      try { ws.close(); } catch(e){}
+      M1 = m1; H1 = h1; H4 = resample4h(h1);
+      FEED = 'yahoo'; wsFails = 0; yahooFails = 0;
+      applyFeedLabel();
+      recompute();
+      setFresh('live');
+      pollTimer = setInterval(yahooPoll, 20000);
+    } catch(e){ /* stay on PAXG, try again in 5 min */ }
+  }, 5 * 60 * 1000);
 }
 
 /* PAXG fallback path: websocket ticks, REST poll if WS is blocked */
 function connectWS(){
   setFresh(wsFails === 0 ? 'connecting' : 'reconnecting');
   try { ws = new WebSocket(PAXG_WS); } catch(e){ schedulePoll(); return; }
-  ws.onopen = () => { wsFails = 0; setFresh('live'); };
+  ws.onopen = () => { wsFails = 0; lastWSMsg = Date.now(); setFresh('live'); };
   ws.onmessage = e => {
+    lastWSMsg = Date.now();
     try {
       const k = JSON.parse(e.data).k;
       if(k) onTick({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c });
@@ -572,13 +629,24 @@ async function boot(){
     connectWS();
   }
   setInterval(refreshHigherTFs, 5 * 60 * 1000);
+  /* WS watchdog: silently-dead sockets (common on mobile) get force-reconnected */
+  setInterval(() => {
+    if(FEED !== 'paxg' || pollTimer) return;
+    if(Date.now() - lastWSMsg > 60000){ try { ws.close(); } catch(e){} connectWS(); }
+  }, 20000);
   document.addEventListener('visibilitychange', async () => {
     if(document.hidden) return;
     try {
-      if(FEED === 'yahoo'){ const bars = await yahooKlines('1m', '1d'); mergeBars(bars); }
-      else { const bars = await paxgKlines('1m', 10); mergeBars(bars); }
+      if(FEED === 'yahoo'){
+        yahooFails = 0;
+        const bars = await yahooKlines('1m', '1d'); mergeBars(bars);
+      } else {
+        const bars = await paxgKlines('1m', 10); mergeBars(bars);
+        if(!pollTimer && Date.now() - lastWSMsg > 45000){ try { ws.close(); } catch(e){} connectWS(); }
+      }
       recompute();
-    } catch(e){}
+      setFresh('live');
+    } catch(e){ setFresh('reconnecting'); }
   });
   window.addEventListener('resize', () => {
     const [nowMs, m1c, h1c, h4c] = closedView();
