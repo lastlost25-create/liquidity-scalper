@@ -144,6 +144,18 @@ function session_of(tsMs) {
   return null;
 }
 
+// Next killzone after tsMs: { name, atMs }. Used for the WAIT panel detail.
+function next_session(tsMs) {
+  const d = new Date(tsMs);
+  const dayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const hour = d.getUTCHours() + d.getUTCMinutes() / 60;
+  for (const [name, start] of CONFIG.sessions) {
+    if (hour < start) return { name, atMs: dayMs + start * 3600e3 };
+  }
+  const [name0, start0] = CONFIG.sessions[0];
+  return { name: name0, atMs: dayMs + 86400e3 + start0 * 3600e3 };
+}
+
 function check_sweep(candle, pool) {
   const pierce = CONFIG.sweep_pierce;
   if (pool.side === 'high') {
@@ -429,13 +441,13 @@ function track_swing_outcome(signal, barsAfter, maxHoldHours = 48) {
 // Node + browser export
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, fractals, detect_pools, structure_trend, session_of,
+    CONFIG, fractals, detect_pools, structure_trend, session_of, next_session,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
     track_outcome, track_swing_outcome, liquidity_map, iso, utcDay, DAY_MS,
   };
 } else if (typeof window !== 'undefined') {
   window.LS = {
-    CONFIG, fractals, detect_pools, structure_trend, session_of,
+    CONFIG, fractals, detect_pools, structure_trend, session_of, next_session,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
     track_outcome, track_swing_outcome, liquidity_map, iso, utcDay, DAY_MS,
   };
