@@ -38,6 +38,7 @@ const CONFIG = {
   max_swing_signals_per_day: 4,       // separate daily cap for swing setups
   swing_sl_buffer: 1.00,             // v1 swing stops (superseded by v2)
   swing_v2_sl: 2.50,                 // v2 sniper SL: fixed $2.50 from entry (his real $2.16, 6 Oct 2026)
+  swing_v2_pool_once: false,         // v2: re-sweeps of the same pool may fire (backtest 6 Oct: +3.94R vs +3.16R)
   htf_match_tol: 1.00,               // 15m swing must sit within $1 of an H1/H4 fractal level (HTF confluence)
   disp_min: 0,                       // displacement-origin filter OFF by default; set to $ to require
   disp_bars: 8,                      // forward 15m bars over which displacement is measured
@@ -322,7 +323,7 @@ function build_swing_signals_v2(m1bars, pools, nowMs, dayMs = null, pdl = null, 
     for (const pool of pools) {
       const formed = (typeof pool.formed_at === 'string') ? new Date(pool.formed_at).getTime() : pool.formed_at;
       if (formed > sweep.t) continue;               // no lookahead
-      if (used.has(pool.id)) continue;              // one signal per pool/day
+      if (CONFIG.swing_v2_pool_once !== false && used.has(pool.id)) continue;  // one signal per pool/day
       const direction = check_sweep(sweep, pool);
       if (!direction) continue;
       const red = direction === 'SHORT';
