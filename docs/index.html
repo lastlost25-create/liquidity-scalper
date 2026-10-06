@@ -567,7 +567,7 @@ async function switchToPaxg(){
       paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
     if(!m1.length) throw new Error('empty paxg');
     M1 = m1; H1 = h1; H4 = h4;
-    try { D1 = await paxgKlines('1D', 90); } catch(e){}
+    try { D1 = await paxgKlines('1d', 90); } catch(e){}
     FEED = 'paxg'; yahooFails = 0; wsFails = 0;
     applyFeedLabel();
     recompute();
@@ -662,7 +662,7 @@ async function refreshHigherTFs(){
     } else {
       const [h1, h4] = await Promise.all([paxgKlines('1h', 500), paxgKlines('4h', 500)]);
       H1 = h1; H4 = h4;
-      try { D1 = await paxgKlines('1D', 90); } catch(e){}
+      try { D1 = await paxgKlines('1d', 90); } catch(e){}
     }
     recompute();
   } catch(e){}
@@ -724,17 +724,18 @@ async function boot(){
   /* Primary: Yahoo XAUUSD spot (closest free match to Exness/OANDA).
      Fallback: Binance PAXG (verified working). */
   try {
-    const [m1, h1, d1] = await Promise.all([
-      yahooKlines('1m', '1d'), yahooKlines('1h', '1mo'), yahooKlines('1d', '3mo')]);
+    const [m1, h1] = await Promise.all([
+      yahooKlines('1m', '1d'), yahooKlines('1h', '1mo')]);
     if(m1.length < 30 || h1.length < 30) throw new Error('thin Yahoo data');
-    M1 = m1; H1 = h1; H4 = resample4h(h1); D1 = d1;
+    M1 = m1; H1 = h1; H4 = resample4h(h1);
+    try { D1 = await yahooKlines('1d', '3mo'); } catch(e){}
     FEED = 'yahoo';
   } catch(e1){
     try {
-      const [m1, h1, h4, d1] = await Promise.all([
-        paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500),
-        paxgKlines('1D', 90)]);
-      M1 = m1; H1 = h1; H4 = h4; D1 = d1;
+      const [m1, h1, h4] = await Promise.all([
+        paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
+      M1 = m1; H1 = h1; H4 = h4;
+      try { D1 = await paxgKlines('1d', 90); } catch(e){}
       FEED = 'paxg';
     } catch(e2){
       err('Could not reach any price feed. Check your connection and reload.');
@@ -767,7 +768,7 @@ async function boot(){
         try { D1 = await yahooKlines('1d', '3mo'); } catch(e2){}
       } else {
         await paxgResync();
-        try { D1 = await paxgKlines('1D', 90); } catch(e2){}
+        try { D1 = await paxgKlines('1d', 90); } catch(e2){}
       }
       recompute();
       setFresh('live');
