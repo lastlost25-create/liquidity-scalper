@@ -56,7 +56,9 @@
   .plan b{font-size:15px;font-family:ui-monospace,Menlo,monospace}
   #pSL{color:var(--red)} #pTP{color:var(--green)} #pEntry{color:var(--blue)}
   #reason{font-size:11px;color:var(--gold);line-height:1.45;margin-top:4px}
-  #poolPanel{top:10px;right:10px;width:212px;max-height:46%;overflow-y:auto}
+  #poolPanel{top:10px;right:10px;width:212px;max-height:46%;overflow-y:auto;display:none}
+  #poolPanel.open{display:block}
+  #poolTab.active{border-color:var(--gold);color:var(--gold)}
   .pool{display:flex;justify-content:space-between;align-items:center;
     padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}
   .pool:last-child{border-bottom:none}
@@ -95,6 +97,7 @@
 <div id="topbar">
   <h1>⚡ LIQUIDITY <span>SCALPER</span></h1>
   <button class="sym" id="symLabel" title="tap to switch feed">···</button>
+  <button class="sym" id="poolTab" title="tap to show/hide liquidity pools">POOLS</button>
   <span class="badge" id="fresh">···</span>
   <div id="price">–</div>
   <span class="badge" id="trend">H1 ···</span>
@@ -830,6 +833,11 @@ async function boot(){
     render(nowMs, m1c, h1c, h4c);
   });
   $('symLabel').addEventListener('click', toggleFeed);
+  $('poolTab').addEventListener('click', () => {
+    const p = $('poolPanel'), t = $('poolTab');
+    const open = p.classList.toggle('open');
+    t.classList.toggle('active', open);
+  });
 }
 boot();
 </script>
