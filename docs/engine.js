@@ -38,6 +38,8 @@ const CONFIG = {
   max_swing_signals_per_day: 4,       // separate daily cap for swing setups
   swing_sl_buffer: 1.00,             // swing stops sit $1 beyond the extreme (Mickey: 8-10 pip SL)
   htf_match_tol: 1.00,               // 15m swing must sit within $1 of an H1/H4 fractal level (HTF confluence)
+  disp_min: 0,                       // displacement-origin filter OFF by default; set to $ to require
+  disp_bars: 8,                      // forward 15m bars over which displacement is measured
 
   use_trend_filter: false,          // DEFAULT OFF (backtest: destroys the edge)
 };
@@ -297,6 +299,26 @@ function detect_swings(m15bars, nowMs, htf) {
   for (const [side, arr] of [['high', highs], ['low', lows]]) {
     for (const [ts, price] of arr) {
       if (ts < maxAge) continue;
+      // Displacement-origin filter (video concept): a swing only counts as
+      // real liquidity if price displaced strongly away from the pivot
+      // shortly after it printed.
+      if (CONFIG.disp_min > 0) {
+        const j = m15bars.findIndex(b => b.t === ts);
+        if (j < 0) continue;
+        const fwd = m15bars.slice(j + 1, j + 1 + CONFIG.disp_bars);
+        if (!fwd.length) continue;
+        let excursion;
+        if (side === 'high') {
+          let mn = Infinity;
+          for (const b of fwd) if (b.l < mn) mn = b.l;
+          excursion = price - mn;
+        } else {
+          let mx = -Infinity;
+          for (const b of fwd) if (b.h > mx) mx = b.h;
+          excursion = mx - price;
+        }
+        if (excursion < CONFIG.disp_min) continue;
+      }
       let merged = null;
       for (const p of swings) {
         if (p.side === side && Math.abs(p.price - price) <= CONFIG.equal_tol) { merged = p; break; }
