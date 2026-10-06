@@ -446,6 +446,8 @@ function drawChart(nowMs){
   if(act){
     [act.entry, act.sl, act.tp, act.tp2, act.tp3].forEach(v => { if(v != null) consider(v); });
   }
+  const allSig = signalsToday.concat(swingSignalsToday);
+  allSig.forEach(s => { if(s.entry != null) consider(s.entry); });
   if(!isFinite(lo)){ lo = 4100; hi = 4200; }
   const pad = ((hi - lo) * 0.10) || 1;
   lo -= pad; hi += pad;
@@ -511,6 +513,32 @@ function drawChart(nowMs){
     }
     level(act.entry, '#3b82f6', 'EN', [7, 5]);
     level(act.sl, '#ef4444', 'SL');
+  }
+  // Historical markers: every signal today gets an entry triangle on its
+  // entry candle, colored by outcome (green TP / red SL / gray open).
+  // The full EN/SL/TP lines above only draw for the fresh (<2h) signal.
+  c.font = '9px system-ui';
+  for(const s of allSig){
+    const ms = Date.parse(s.signal_at);
+    let idx = -1;
+    for(let i = 0; i < n; i++){ if(candles[i].t >= ms){ idx = i; break; } }
+    if(idx < 0 || s.entry == null) continue;
+    const x = idx * cw + cw / 2, ye = y(s.entry);
+    const won = s.outcome && s.outcome.startsWith('TP');
+    const col = won ? '#22c55e' : s.outcome === 'SL' ? '#ef4444' : '#9ca3af';
+    const sz = 5;
+    c.fillStyle = col;
+    c.beginPath();
+    if(s.direction === 'LONG'){ c.moveTo(x, ye - sz - 1); c.lineTo(x - sz, ye - 2 * sz - 1); c.lineTo(x + sz, ye - 2 * sz - 1); }
+    else { c.moveTo(x, ye + sz + 1); c.lineTo(x - sz, ye + 2 * sz + 1); c.lineTo(x + sz, ye + 2 * sz + 1); }
+    c.closePath(); c.fill();
+    if(s.r != null){
+      const txt = (s.r > 0 ? '+' : '') + s.r + 'R';
+      const tw = c.measureText(txt).width;
+      const ty = s.direction === 'LONG' ? ye - 2 * sz - 5 : ye + 2 * sz + 13;
+      c.fillStyle = 'rgba(10,14,20,.8)'; c.fillRect(x - tw / 2 - 3, ty - 9, tw + 6, 12);
+      c.fillStyle = col; c.fillText(txt, x - tw / 2, ty + 1);
+    }
   }
   level(price, '#d4a93c', '', [3, 4]);
 }
