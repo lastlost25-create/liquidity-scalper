@@ -416,7 +416,8 @@ function drawChart(nowMs){
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.clearRect(0, 0, W, H);
 
-  const candles = M1.slice(-viewCount);
+  const off = Math.min(viewOffset, Math.max(0, M1.length - viewCount));
+  const candles = off > 0 ? M1.slice(-(viewCount + off), -off) : M1.slice(-viewCount);
   const AXW = 60, AXH = 22;
   const pw = W - AXW, ph = H - AXH;
   let lo = Infinity, hi = -Infinity;
@@ -474,7 +475,7 @@ function drawChart(nowMs){
   for(let i = 0; i < n; i++){
     const k = candles[i];
     const x = i * cw + cw / 2, bw = Math.max(1, cw * 0.62);
-    const live = i === n - 1;
+    const live = i === n - 1 && viewOffset <= 0;
     const col = k.c >= k.o ? '#22c55e' : '#ef4444';
     c.strokeStyle = col;
     c.beginPath(); c.moveTo(x, y(k.h)); c.lineTo(x, y(k.l)); c.stroke();
@@ -661,6 +662,7 @@ function defaultViewCount(){
   return Math.max(40, Math.min(600, Math.round(pw / 5)));
 }
 let viewCount = 240;                       // visible candles, anchored to the live edge
+let viewOffset = 0;                      // candles panned back from the live edge (drag to scroll)
 let userZoomed = false;                    // don't override a manual zoom on resize
 const VIEW_MIN = 40, VIEW_MAX = 600;
 function applyZoom(factor){
@@ -671,14 +673,18 @@ function applyZoom(factor){
 (function initGestures(){
   const cv = $('chart');
   const pts = new Map();
-  let pinchD = 0, lastTap = 0;
+  let pinchD = 0, lastTap = 0, dragX = null, dragOff = 0;
   const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+  const candleW = () => Math.max(2, (cv.clientWidth - 60) / viewCount);
+  const maxOff = () => Math.max(0, M1.length - viewCount);
   cv.addEventListener('pointerdown', e => {
     const now = Date.now();
-    if(pts.size === 0 && now - lastTap < 300){ viewCount = defaultViewCount(); userZoomed = false; drawChart(now); }  // double-tap resets
+    if(pts.size === 0 && now - lastTap < 300){ viewCount = defaultViewCount(); viewOffset = 0; userZoomed = false; drawChart(now); }  // double-tap resets
     lastTap = now;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if(pts.size === 2) pinchD = dist();
+    try { cv.setPointerCapture(e.pointerId); } catch(_){}
+    if(pts.size === 2){ pinchD = dist(); dragX = null; }
+    else if(pts.size === 1){ dragX = e.clientX; dragOff = viewOffset; }
   });
   cv.addEventListener('pointermove', e => {
     if(!pts.has(e.pointerId)) return;
@@ -687,9 +693,12 @@ function applyZoom(factor){
       const d = dist();
       if(pinchD > 0 && d > 0) applyZoom(d / pinchD);
       pinchD = d;
+    } else if(pts.size === 1 && dragX !== null){
+      viewOffset = Math.min(maxOff(), Math.max(0, Math.round(dragOff + (e.clientX - dragX) / candleW())));
+      drawChart(Date.now());
     }
   });
-  const up = e => { pts.delete(e.pointerId); if(pts.size < 2) pinchD = 0; };
+  const up = e => { pts.delete(e.pointerId); if(pts.size < 2) pinchD = 0; if(pts.size === 0) dragX = null; };
   cv.addEventListener('pointerup', up);
   cv.addEventListener('pointercancel', up);
   cv.addEventListener('wheel', e => {
