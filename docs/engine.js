@@ -28,7 +28,7 @@ const CONFIG = {
 
   // Session filter — killzones in UTC hours
   sessions: [
-    ['London', 7, 10],
+    ['London', 6, 10],
     ['NewYork', 12, 15],
   ],
 
@@ -36,7 +36,8 @@ const CONFIG = {
   m15_left: 5, m15_right: 5,          // 15m fractal for major swings
   confirm_body_ratio: 0.6,            // "good body": body >= 60% of candle range
   max_swing_signals_per_day: 4,       // separate daily cap for swing setups
-  swing_sl_buffer: 1.00,             // swing stops sit $1 beyond the extreme (Mickey: 8-10 pip SL)
+  swing_sl_buffer: 1.00,             // v1 swing stops (superseded by v2)
+  swing_v2_sl: 2.50,                 // v2 sniper SL: fixed $2.50 from entry (his real $2.16, 6 Oct 2026)
   htf_match_tol: 1.00,               // 15m swing must sit within $1 of an H1/H4 fractal level (HTF confluence)
   disp_min: 0,                       // displacement-origin filter OFF by default; set to $ to require
   disp_bars: 8,                      // forward 15m bars over which displacement is measured
@@ -237,7 +238,12 @@ function build_signals(m1bars, pools, h1bars, nowMs, dayMs = null, usedPoolIds =
         session: sess,
         reason: bits.join(' · '),
       });
-      used.add(pool.id);
+      // one signal per LEVEL per day: an H1 pool and an H4 pool sitting at
+      // the same price are one level — a sweep that fires one must not
+      // print the other as a second signal (Oct 6 duplicate-level fix).
+      for (const p2 of pools) {
+        if (p2.side === pool.side && Math.abs(p2.price - pool.price) <= CONFIG.equal_tol) used.add(p2.id);
+      }
     }
   }
   signals.sort((a, b) => b.rr - a.rr);
@@ -291,137 +297,65 @@ function liquidity_map(price, pools, n = 5) {
  *           TP1/TP2/TP3 = last three 15m swing lows.
  * LONG: mirrored at 15m swing lows. Closed candles only — no repaint.
  * -------------------------------------------------------------------------- */
-function detect_swings(m15bars, nowMs, htf) {
-  const maxAge = nowMs - CONFIG.pool_max_age_days * DAY_MS;
-  const [highs, lows] = fractals(m15bars, CONFIG.m15_left, CONFIG.m15_right);
-  const swings = [];
-  let pid = 0;
-  for (const [side, arr] of [['high', highs], ['low', lows]]) {
-    for (const [ts, price] of arr) {
-      if (ts < maxAge) continue;
-      // Displacement-origin filter (video concept): a swing only counts as
-      // real liquidity if price displaced strongly away from the pivot
-      // shortly after it printed.
-      if (CONFIG.disp_min > 0) {
-        const j = m15bars.findIndex(b => b.t === ts);
-        if (j < 0) continue;
-        const fwd = m15bars.slice(j + 1, j + 1 + CONFIG.disp_bars);
-        if (!fwd.length) continue;
-        let excursion;
-        if (side === 'high') {
-          let mn = Infinity;
-          for (const b of fwd) if (b.l < mn) mn = b.l;
-          excursion = price - mn;
-        } else {
-          let mx = -Infinity;
-          for (const b of fwd) if (b.h > mx) mx = b.h;
-          excursion = mx - price;
-        }
-        if (excursion < CONFIG.disp_min) continue;
-      }
-      let merged = null;
-      for (const p of swings) {
-        if (p.side === side && Math.abs(p.price - price) <= CONFIG.equal_tol) { merged = p; break; }
-      }
-      if (merged) {
-        merged.touches += 1;
-        merged.price = (merged.price * (merged.touches - 1) + price) / merged.touches;
-        merged.formed_at = Math.max(merged.formed_at, ts);
-      } else {
-        pid += 1;
-        swings.push({
-          id: `M15-${side}-${pid}`, tf: 'M15', side,
-          price: round2(price), touches: 1, premium: false, formed_at: ts,
-        });
-      }
-    }
-  }
-  for (const p of swings) p.premium = p.touches >= 2;
-  // HTF confluence (Mickey's rule): keep only 15m swings sitting within
-  // htf_match_tol of a same-side H1/H4 fractal level. htf = {high:[], low:[]}.
-  let kept = swings;
-  if (htf) {
-    const tol = CONFIG.htf_match_tol;
-    kept = swings.filter(p => (htf[p.side] || []).some(lvl => Math.abs(p.price - lvl) <= tol));
-  }
-  kept.sort((a, b) => a.formed_at - b.formed_at);
-  return kept.slice(-CONFIG.max_pools_per_tf).map(p => ({ ...p, price: round2(p.price) }));
-}
-
-function build_swing_signals(m1bars, swings, nowMs, dayMs = null, usedIds = null) {
+/* ----------------------------------------------------------------------------
+ * V2 SNIPER SWING — screenshot-faithful setup (calibrated 6 Oct 2026 from
+ * Mickey's real OANDA trade: LONG 4114.911, SL 4112.755, TP1 4123.335=PDL).
+ * Level: the H1/H4 pool itself (his "4h + 1h swing low") — no 15m middleman.
+ * Trigger: M1 sweep (wick >= pool +/- sweep_pierce, close back inside).
+ * Entry: next M1 open (the reclaim). No confirmation / break candles.
+ * SL: slMode 'fixed' -> entry -/+ CONFIG.swing_v2_sl ($2.50 ~ his $2.16);
+ *     slMode 'extreme' (default) -> sweep extreme +/- $0.40 (backtest +2.79R).
+ * TP1/TP2/TP3: nearest three opposing levels from pools + PDL/PDH.
+ * RR gate on TP1 >= min_rr. Killzones, 4/day cap, one trade per sweep.
+ * -------------------------------------------------------------------------- */
+function build_swing_signals_v2(m1bars, pools, nowMs, dayMs = null, pdl = null, pdh = null, slMode = 'extreme') {
   const day = utcDay(dayMs === null ? nowMs : dayMs);
   const scan = m1bars.filter(b => utcDay(b.t) === day);
   if (scan.length < 10) return { signals: [], stats: {} };
-  const used = usedIds || new Set();
+  const used = new Set();
   const signals = [];
   const stats = {};
-  const isRed = k => k.c < k.o, isGreen = k => k.c > k.o;
-  const bodyRatio = k => (k.h === k.l) ? 0 : Math.abs(k.c - k.o) / (k.h - k.l);
   const px = v => v.toLocaleString('en-US', { minimumFractionDigits: 2 });
 
-  for (let i = 0; i < scan.length - 9; i++) {
+  for (let i = 0; i < scan.length - 2; i++) {
     const sweep = scan[i];
-    for (const sw of swings) {
-      if (sw.formed_at > sweep.t) continue;          // no lookahead
-      if (used.has(sw.id)) continue;                 // one signal per swing/day
-      const direction = check_sweep(sweep, sw);
+    for (const pool of pools) {
+      const formed = (typeof pool.formed_at === 'string') ? new Date(pool.formed_at).getTime() : pool.formed_at;
+      if (formed > sweep.t) continue;               // no lookahead
+      if (used.has(pool.id)) continue;              // one signal per pool/day
+      const direction = check_sweep(sweep, pool);
       if (!direction) continue;
       const red = direction === 'SHORT';
 
-      // 1) two confirmation candles of the right color right after the sweep
-      const c1 = scan[i + 1], c2 = scan[i + 2];
-      const twoOk = red ? (isRed(c1) && isRed(c2)) : (isGreen(c1) && isGreen(c2));
-      if (!twoOk) { stats.no_confirm = (stats.no_confirm || 0) + 1; continue; }
-
-      // 2) "good body" reference: strongest-bodied right-colored candle in i+1..i+4
-      let ref = null, refBody = -1;
-      for (let j = i + 1; j <= i + 4; j++) {
-        const k = scan[j];
-        if ((red ? isRed(k) : isGreen(k)) && bodyRatio(k) >= CONFIG.confirm_body_ratio) {
-          const b = Math.abs(k.c - k.o);
-          if (b > refBody) { refBody = b; ref = k; }
-        }
-      }
-      if (!ref) { stats.no_ref = (stats.no_ref || 0) + 1; continue; }
-
-      // 3) break candle: first right-colored candle in i+3..i+8 closing beyond ref extreme
-      let brk = -1;
-      for (let j = i + 3; j <= i + 8; j++) {
-        const k = scan[j];
-        const broke = red ? (isRed(k) && k.c < ref.l) : (isGreen(k) && k.c > ref.h);
-        if (broke) { brk = j; break; }
-      }
-      if (brk < 0) { stats.no_break = (stats.no_break || 0) + 1; continue; }
-
-      // the sweep stands only if no confirmation candle closed back beyond the level
-      let reclaimed = false;
-      for (let j = i + 1; j <= brk; j++) {
-        if (red ? scan[j].c > sw.price : scan[j].c < sw.price) { reclaimed = true; break; }
-      }
-      if (reclaimed) { stats.reclaimed = (stats.reclaimed || 0) + 1; continue; }
-
-      const entryBar = scan[brk + 1];                 // entry at next M1 open
+      const entryBar = scan[i + 1];                 // the reclaim: next M1 open
       const entry = entryBar.o, signal_at = entryBar.t;
       const sess = session_of(signal_at);
       if (!sess) { stats.off_session = (stats.off_session || 0) + 1; continue; }
 
-      const extreme = red ? Math.max(sw.price, sweep.h) : Math.min(sw.price, sweep.l);
-      const sl = red ? extreme + CONFIG.swing_sl_buffer : extreme - CONFIG.swing_sl_buffer;
+      let sl;
+      if (slMode === 'extreme') {
+        const buf = 0.40;
+        sl = red ? Math.max(pool.price, sweep.h) + buf : Math.min(pool.price, sweep.l) - buf;
+      } else {
+        sl = red ? entry + CONFIG.swing_v2_sl : entry - CONFIG.swing_v2_sl;
+      }
 
-      // TP1/TP2/TP3: the three most recent opposing 15m swings
-      const opp = swings
-        .filter(s => s.formed_at < signal_at &&
-          (red ? (s.side === 'low' && s.price < entry) : (s.side === 'high' && s.price > entry)))
-        .sort((a, b) => red ? b.price - a.price : a.price - b.price)
-        .slice(0, 3);
-      if (!opp.length) { stats.no_tp = (stats.no_tp || 0) + 1; continue; }
-      const tp1 = opp[0].price, tp2 = opp.length > 1 ? opp[1].price : null,
-            tp3 = opp.length > 2 ? opp[2].price : null;
+      // TP1/TP2/TP3: nearest three opposing levels (pools + PDL/PDH)
+      const cands = [];
+      for (const p of pools) {
+        if (red && p.side === 'low' && p.price < entry) cands.push(p.price);
+        else if (!red && p.side === 'high' && p.price > entry) cands.push(p.price);
+      }
+      if (red && pdl != null && pdl < entry) cands.push(pdl);
+      if (!red && pdh != null && pdh > entry) cands.push(pdh);
+      const uniq = [...new Set(cands.map(c => round2(c)))].sort((a, b) => red ? b - a : a - b).slice(0, 3);
+      if (!uniq.length) { stats.no_tp = (stats.no_tp || 0) + 1; continue; }
+      const tp1 = uniq[0], tp2 = uniq.length > 1 ? uniq[1] : null, tp3 = uniq.length > 2 ? uniq[2] : null;
       const risk = Math.abs(entry - sl);
       if (risk <= 0) continue;
       const rr1 = Math.abs(tp1 - entry) / risk;
       if (rr1 < CONFIG.min_rr) { stats.low_rr = (stats.low_rr || 0) + 1; continue; }
-      // sanity: entry must sit between SL and TP1 (never already through the stop)
+      // sanity: entry must sit strictly between SL and TP1 (never already through the stop)
       const sidesOk = red ? (entry < sl && entry > tp1) : (entry > sl && entry < tp1);
       if (!sidesOk) { stats.invalid = (stats.invalid || 0) + 1; continue; }
       const rrOf = v => v == null ? null : round2(Math.abs(v - entry) / risk);
@@ -432,18 +366,24 @@ function build_swing_signals(m1bars, swings, nowMs, dayMs = null, usedIds = null
         entry: round2(entry), sl: round2(sl),
         tp: tp1, tp2, tp3,
         rr: round2(rr1), rr2: rrOf(tp2), rr3: rrOf(tp3),
-        swing_id: sw.id, swing_tf: 'M15', swing_price: sw.price,
-        swept_at: iso(sweep.t), confirm_at: iso(scan[brk].t),
+        swing_id: pool.id, swing_tf: pool.tf || 'HTF', swing_price: pool.price,
+        swept_at: iso(sweep.t), confirm_at: iso(sweep.t),
         signal_at: iso(signal_at), session: sess,
-        reason: `Swept M15 ${sw.side === 'high' ? 'buy' : 'sell'}-side swing @ ${px(sw.price)}` +
-          (sw.premium ? ' ★' : '') + ' · 2-candle + break confirmation',
+        reason: `Swept ${pool.side === 'high' ? 'buy' : 'sell'}-side ${pool.tf || 'HTF'} pool @ ${px(pool.price)}` +
+          (pool.premium ? ' ★' : '') + ' · sniper reclaim entry',
       });
-      used.add(sw.id);
+      used.add(pool.id);
       stats.passed = (stats.passed || 0) + 1;
     }
   }
-  signals.sort((a, b) => b.rr - a.rr);
-  return { signals: signals.slice(0, CONFIG.max_swing_signals_per_day), stats };
+  // one trade per sweep: the same M1 candle can sweep an H1 and an H4 pool
+  // at once — keep only the highest-RR signal per sweep minute
+  const best = new Map();
+  for (const s of signals) {
+    if (!best.has(s.swept_at) || s.rr > best.get(s.swept_at).rr) best.set(s.swept_at, s);
+  }
+  const out = [...best.values()].sort((a, b) => b.rr - a.rr);
+  return { signals: out.slice(0, CONFIG.max_swing_signals_per_day), stats };
 }
 
 /* ----------------------------------------------------------------------------
@@ -485,14 +425,14 @@ function track_swing_outcome(signal, barsAfter, maxHoldHours = 48) {
 // Node + browser export
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, fractals, detect_pools, detect_swings, structure_trend, session_of,
-    check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals,
+    CONFIG, fractals, detect_pools, structure_trend, session_of,
+    check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
     track_outcome, track_swing_outcome, liquidity_map, iso, utcDay, DAY_MS,
   };
 } else if (typeof window !== 'undefined') {
   window.LS = {
-    CONFIG, fractals, detect_pools, detect_swings, structure_trend, session_of,
-    check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals,
+    CONFIG, fractals, detect_pools, structure_trend, session_of,
+    check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
     track_outcome, track_swing_outcome, liquidity_map, iso, utcDay, DAY_MS,
   };
 }
