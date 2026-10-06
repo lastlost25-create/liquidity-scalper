@@ -480,6 +480,12 @@ function drawChart(nowMs){
   pmap.below.forEach(p => band(p, 'rgba(34,197,94,.08)', p.premium ? '#d4a93c' : null));
 
   const n = candles.length, cw = pw / n;
+  // entry-candle indices for today's signals (blue outline)
+  const entryIdx = new Set();
+  for(const s of allSig){
+    const ms = Date.parse(s.signal_at);
+    for(let i = 0; i < n; i++){ if(candles[i].t >= ms){ entryIdx.add(i); break; } }
+  }
   for(let i = 0; i < n; i++){
     const k = candles[i];
     const x = i * cw + cw / 2, bw = Math.max(1, cw * 0.62);
@@ -490,6 +496,11 @@ function drawChart(nowMs){
     const yO = y(k.o), yC = y(k.c);
     if(live){ c.strokeRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1.5, Math.abs(yC - yO))); }
     else { c.fillStyle = col; c.fillRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1, Math.abs(yC - yO))); }
+    if(entryIdx.has(i)){
+      c.strokeStyle = '#3b82f6'; c.lineWidth = 2;
+      c.strokeRect(x - bw/2 - 2.5, y(k.h) - 1.5, bw + 5, y(k.l) - y(k.h) + 3);
+      c.lineWidth = 1;
+    }
   }
 
   c.fillStyle = '#5b6478';
