@@ -39,6 +39,7 @@ const CONFIG = {
   swing_sl_buffer: 1.00,             // v1 swing stops (superseded by v2)
   swing_v2_sl: 2.50,                 // v2 sniper SL: fixed $2.50 from entry (his real $2.16, 6 Oct 2026)
   swing_v2_pool_once: false,         // v2: re-sweeps of the same pool may fire (backtest 6 Oct: +3.94R vs +3.16R)
+  swing_v2_rank: 'rr',               // v2 final daily pick: 'rr' (top-RR) or 'time' (chronological; backtest: 'rr' wins)
   htf_match_tol: 1.00,               // 15m swing must sit within $1 of an H1/H4 fractal level (HTF confluence)
   disp_min: 0,                       // displacement-origin filter OFF by default; set to $ to require
   disp_bars: 8,                      // forward 15m bars over which displacement is measured
@@ -383,7 +384,9 @@ function build_swing_signals_v2(m1bars, pools, nowMs, dayMs = null, pdl = null, 
   for (const s of signals) {
     if (!best.has(s.swept_at) || s.rr > best.get(s.swept_at).rr) best.set(s.swept_at, s);
   }
-  const out = [...best.values()].sort((a, b) => b.rr - a.rr);
+  const out = CONFIG.swing_v2_rank === 'time'
+    ? [...best.values()].sort((a, b) => a.signal_at < b.signal_at ? -1 : 1)
+    : [...best.values()].sort((a, b) => b.rr - a.rr);
   return { signals: out.slice(0, CONFIG.max_swing_signals_per_day), stats };
 }
 
