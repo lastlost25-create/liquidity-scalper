@@ -517,6 +517,7 @@ function setFresh(state){
   const fb = $('fresh');
   if(state === 'live'){ fb.textContent = '● LIVE'; fb.className = 'badge on'; }
   else if(state === 'connecting'){ fb.textContent = '○ CONNECTING…'; fb.className = 'badge'; }
+  else if(state === 'offline'){ fb.textContent = '○ OFFLINE — waiting for connection'; fb.className = 'badge warn'; }
   else { fb.textContent = '○ RECONNECTING…'; fb.className = 'badge warn'; }
 }
 
@@ -633,6 +634,30 @@ async function paxgPollOnce(){
     setFresh('live');
   } catch(e){ setFresh('reconnecting'); }
 }
+/* Backfill any missed M1 range on the PAXG feed (an outage leaves a hole that
+   ticks alone never repair), then make sure the live socket is up. */
+async function paxgResync(){
+  try {
+    const lastT = M1.length ? M1[M1.length - 1].t : 0;
+    const gapMin = Math.ceil((Date.now() - lastT) / 60000);
+    if(gapMin > 2){
+      const bars = await paxgKlines('1m', Math.min(1000, gapMin + 2));
+      if(mergeBars(bars)) recompute();
+    }
+    if(!pollTimer){ try { ws.close(); } catch(e){} connectWS(); }
+    setFresh('live');
+  } catch(e){ setFresh('reconnecting'); }
+}
+/* Instant Yahoo resync (the 20s poll would backfill anyway, but not instantly) */
+async function yahooResync(){
+  try {
+    yahooFails = 0;
+    const bars = await yahooKlines('1m', '1d');
+    mergeBars(bars);
+    recompute();
+    setFresh('live');
+  } catch(e){ setFresh('reconnecting'); }
+}
 function schedulePoll(){
   if(pollTimer) return;
   setFresh('reconnecting');
@@ -739,10 +764,11 @@ async function boot(){
     connectWS();
   }
   setInterval(refreshHigherTFs, 5 * 60 * 1000);
-  /* WS watchdog: silently-dead sockets (common on mobile) get force-reconnected */
+  /* WS watchdog: silently-dead sockets (common on mobile) get force-reconnected,
+     with backfill so the dead minutes don't leave a hole in the chart */
   setInterval(() => {
     if(FEED !== 'paxg' || pollTimer) return;
-    if(Date.now() - lastWSMsg > 60000){ try { ws.close(); } catch(e){} connectWS(); }
+    if(Date.now() - lastWSMsg > 60000) paxgResync();
   }, 20000);
   document.addEventListener('visibilitychange', async () => {
     if(document.hidden) return;
@@ -752,13 +778,19 @@ async function boot(){
         const bars = await yahooKlines('1m', '1d'); mergeBars(bars);
         try { M15 = await yahooKlines('15m', '1mo'); } catch(e2){}
       } else {
-        const bars = await paxgKlines('1m', 10); mergeBars(bars);
+        await paxgResync();
         try { M15 = await paxgKlines('15m', 500); } catch(e2){}
-        if(!pollTimer && Date.now() - lastWSMsg > 45000){ try { ws.close(); } catch(e){} connectWS(); }
       }
       recompute();
       setFresh('live');
     } catch(e){ setFresh('reconnecting'); }
+  });
+  /* Network drop / reconnect: show OFFLINE immediately, resync the instant
+     the connection is back (backfills missed candles, restarts the socket) */
+  window.addEventListener('offline', () => setFresh('offline'));
+  window.addEventListener('online', () => {
+    setFresh('reconnecting');
+    if(FEED === 'paxg') paxgResync(); else yahooResync();
   });
   window.addEventListener('resize', () => {
     if(!userZoomed) viewCount = defaultViewCount();
