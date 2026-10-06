@@ -156,9 +156,9 @@ const PKT = 'Asia/Karachi';
 const FRESH_MIN = 120;               // active-signal recency, like the Python engine
 
 let FEED = null;                     // 'yahoo' | 'paxg'
-let M1 = [], H1 = [], H4 = [], M15 = []; // M1 includes the forming candle last
+let M1 = [], H1 = [], H4 = [], D1 = []; // M1 includes the forming candle last
 let pools = [], signalsToday = [];
-let swings = [], swingSignalsToday = [];   // 15m "liq bias" swing setups
+let swingSignalsToday = [];   // v2 sniper swing setups (HTF pool -> M1 reclaim)
 let ws = null, wsFails = 0, pollTimer = null, lastPrice = 0;
 let yahooFails = 0, yahooRetryTimer = null, lastWSMsg = 0;
 
@@ -224,7 +224,7 @@ async function attemptYahooNow(){
     if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
     try { ws.close(); } catch(e){}
     M1 = m1; H1 = h1; H4 = resample4h(h1);
-    try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
+    try { D1 = await yahooKlines('1d', '3mo'); } catch(e){}
     FEED = 'yahoo'; wsFails = 0; yahooFails = 0;
     applyFeedLabel();
     recompute();
@@ -241,6 +241,16 @@ function toggleFeed(){
   }
 }
 
+/* Previous completed day's high/low (PDH/PDL) from daily bars — v2 sniper
+   targets (Mickey's TP1 was the previous-day low, 6 Oct 2026). */
+function prevDayHL(nowMs){
+  if(!D1.length) return { pdl: null, pdh: null };
+  const dayStart = Date.UTC(new Date(nowMs).getUTCFullYear(), new Date(nowMs).getUTCMonth(), new Date(nowMs).getUTCDate());
+  let prev = null;
+  for(const b of D1){ if(b.t < dayStart) prev = b; else break; }
+  return prev ? { pdl: prev.l, pdh: prev.h } : { pdl: null, pdh: null };
+}
+
 /* ---------------- engine ---------------- */
 function recompute(){
   const nowMs = Date.now();
@@ -255,26 +265,17 @@ function recompute(){
     return after.length ? Object.assign({}, s, LS.track_outcome(s, after))
                         : Object.assign({}, s, { outcome: null, r: null });
   });
-  // swing setups: 15m major swings + M1 sweep + confirmation
-  // Mickey's rule: only 15m swings sitting on H1/H4 liquidity (HTF confluence)
-  if(M15.length >= 30){
-    const m15c = LS.closed_only(M15, nowMs);
-    const htf = { high: [], low: [] };
-    for (const [bars, L, R] of [[h1c, LS.CONFIG.h1_left, LS.CONFIG.h1_right],
-                                [h4c, LS.CONFIG.h4_left, LS.CONFIG.h4_right]]) {
-      if (!bars || !bars.length) continue;
-      const [hs, ls] = LS.fractals(bars, L, R);
-      for (const [, p] of hs) htf.high.push(p);
-      for (const [, p] of ls) htf.low.push(p);
-    }
-    swings = LS.detect_swings(m15c, nowMs, htf);
-    const swr = LS.build_swing_signals(m1c, swings, nowMs);
+  // v2 SNIPER swing: HTF pool sweep -> M1 reclaim entry (Mickey's real setup,
+  // calibrated 6 Oct 2026). Pools ARE the levels (his "4h + 1h swing low").
+  {
+    const { pdl, pdh } = prevDayHL(nowMs);
+    const swr = LS.build_swing_signals_v2(m1c, pools, nowMs, null, pdl, pdh, 'extreme');
     swingSignalsToday = swr.signals.map(s => {
       const after = m1c.filter(b => b.t > Date.parse(s.signal_at));
       return after.length ? Object.assign({}, s, LS.track_swing_outcome(s, after))
                           : Object.assign({}, s, { outcome: null, r: null });
     });
-  } else { swings = []; swingSignalsToday = []; }
+  }
   const allSigs = signalsToday.concat(swingSignalsToday);
   // detect newly resolved trades -> pulse the result banner (no flash on first load)
   const cur = {};
@@ -426,8 +427,6 @@ function drawChart(nowMs){
   const price0 = M1[M1.length-1].c;
   const pmap = LS.liquidity_map(price0, pools);   // only drawn pools set the axis
   pmap.above.concat(pmap.below).forEach(p => consider(p.price));
-  const smap = LS.liquidity_map(price0, swings, 3); // nearest M15 swings
-  smap.above.concat(smap.below).forEach(p => consider(p.price));
   const act = marketOpen(nowMs) ? activeSignal(nowMs) : null;
   if(act){
     [act.entry, act.sl, act.tp, act.tp2, act.tp3].forEach(v => { if(v != null) consider(v); });
@@ -459,17 +458,6 @@ function drawChart(nowMs){
   const price = price0;
   pmap.above.forEach(p => band(p, 'rgba(239,68,68,.08)', p.premium ? '#d4a93c' : null));
   pmap.below.forEach(p => band(p, 'rgba(34,197,94,.08)', p.premium ? '#d4a93c' : null));
-  // M15 major swing zones (liq-bias levels) — gold tint, distinct from H1/H4 pools
-  const sband = (p) => {
-    const y1 = y(p.price + .30), y2 = y(p.price - .30);
-    c.fillStyle = 'rgba(212,169,60,.10)'; c.fillRect(0, y1, pw, y2 - y1);
-    c.strokeStyle = '#d4a93c'; c.setLineDash([5, 4]); c.lineWidth = 1.2;
-    c.beginPath(); c.moveTo(0, (y1 + y2) / 2); c.lineTo(pw, (y1 + y2) / 2); c.stroke();
-    c.setLineDash([]); c.lineWidth = 1;
-    c.fillStyle = '#d4a93c';
-    c.fillText('M15' + (p.premium ? ' ★' : ''), 6, (y1 + y2) / 2 - 4);
-  };
-  smap.above.concat(smap.below).forEach(sband);
 
   const n = candles.length, cw = pw / n;
   for(let i = 0; i < n; i++){
@@ -579,7 +567,7 @@ async function switchToPaxg(){
       paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
     if(!m1.length) throw new Error('empty paxg');
     M1 = m1; H1 = h1; H4 = h4;
-    try { M15 = await paxgKlines('15m', 500); } catch(e){}
+    try { D1 = await paxgKlines('1D', 90); } catch(e){}
     FEED = 'paxg'; yahooFails = 0; wsFails = 0;
     applyFeedLabel();
     recompute();
@@ -670,11 +658,11 @@ async function refreshHigherTFs(){
     if(FEED === 'yahoo'){
       const h1 = await yahooKlines('1h', '1mo');
       H1 = h1; H4 = resample4h(h1);
-      try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
+      try { D1 = await yahooKlines('1d', '3mo'); } catch(e){}
     } else {
       const [h1, h4] = await Promise.all([paxgKlines('1h', 500), paxgKlines('4h', 500)]);
       H1 = h1; H4 = h4;
-      try { M15 = await paxgKlines('15m', 500); } catch(e){}
+      try { D1 = await paxgKlines('1D', 90); } catch(e){}
     }
     recompute();
   } catch(e){}
@@ -736,17 +724,17 @@ async function boot(){
   /* Primary: Yahoo XAUUSD spot (closest free match to Exness/OANDA).
      Fallback: Binance PAXG (verified working). */
   try {
-    const [m1, h1, m15] = await Promise.all([
-      yahooKlines('1m', '1d'), yahooKlines('1h', '1mo'), yahooKlines('15m', '1mo')]);
+    const [m1, h1, d1] = await Promise.all([
+      yahooKlines('1m', '1d'), yahooKlines('1h', '1mo'), yahooKlines('1d', '3mo')]);
     if(m1.length < 30 || h1.length < 30) throw new Error('thin Yahoo data');
-    M1 = m1; H1 = h1; H4 = resample4h(h1); M15 = m15;
+    M1 = m1; H1 = h1; H4 = resample4h(h1); D1 = d1;
     FEED = 'yahoo';
   } catch(e1){
     try {
-      const [m1, h1, h4, m15] = await Promise.all([
+      const [m1, h1, h4, d1] = await Promise.all([
         paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500),
-        paxgKlines('15m', 500)]);
-      M1 = m1; H1 = h1; H4 = h4; M15 = m15;
+        paxgKlines('1D', 90)]);
+      M1 = m1; H1 = h1; H4 = h4; D1 = d1;
       FEED = 'paxg';
     } catch(e2){
       err('Could not reach any price feed. Check your connection and reload.');
@@ -776,10 +764,10 @@ async function boot(){
       if(FEED === 'yahoo'){
         yahooFails = 0;
         const bars = await yahooKlines('1m', '1d'); mergeBars(bars);
-        try { M15 = await yahooKlines('15m', '1mo'); } catch(e2){}
+        try { D1 = await yahooKlines('1d', '3mo'); } catch(e2){}
       } else {
         await paxgResync();
-        try { M15 = await paxgKlines('15m', 500); } catch(e2){}
+        try { D1 = await paxgKlines('1D', 90); } catch(e2){}
       }
       recompute();
       setFresh('live');
