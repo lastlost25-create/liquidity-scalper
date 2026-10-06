@@ -362,12 +362,27 @@ function renderPanels(nowMs, h1c, h4c){
     $('reason').textContent = '💧 ' + live.reason;
   } else {
     plan.style.display = 'none';
+    sp.className = 'panel WAIT';
+    $('vtext').textContent = 'WAIT';
     const sess = open ? LS.session_of(nowMs) : null;
-    $('vsub').textContent = !open ? 'market closed (weekend)' :
-      sess ? 'in killzone — strict filters active' : 'outside killzones — no signals';
-    $('reason').textContent = !open ? '' :
-      sess ? (signalsToday.length ? '' : '⏳ in killzone — waiting for a pool sweep…')
-           : '⏳ Outside killzones — pools still mapped, no signals';
+    const nSig = signalsToday.length + swingSignalsToday.length;
+    const usedTxt = nSig ? ` · ${nSig} signal${nSig > 1 ? 's' : ''} today` : '';
+    if (!open) {
+      $('vsub').textContent = 'Market closed (weekend)';
+      $('reason').textContent = '⏳ Waiting for the Monday 00:00 UTC open';
+    } else if (sess) {
+      const map = LS.liquidity_map(price, pools);
+      const ab = map.above[0], be = map.below[0];
+      const watch = [ab && ab.price.toFixed(2) + ' ↑', be && be.price.toFixed(2) + ' ↓'].filter(Boolean).join(' · ');
+      $('vsub').textContent = `In ${sess} killzone — strict filters active${usedTxt}`;
+      $('reason').textContent = `⏳ Waiting for reversal — watching ${watch || 'pools'} for an M1 sweep + reclaim entry`;
+    } else {
+      const nx = LS.next_session(nowMs);
+      const t = new Date(nx.atMs);
+      const hh = String(t.getUTCHours()).padStart(2, '0') + ':' + String(t.getUTCMinutes()).padStart(2, '0');
+      $('vsub').textContent = `Outside killzones — no signals${usedTxt}`;
+      $('reason').textContent = `⏳ Waiting for entry window — next: ${nx.name} ${hh} UTC · pools still mapped`;
+    }
   }
 
   const trend = LS.structure_trend(h1c, LS.CONFIG.h1_left, LS.CONFIG.h1_right);
