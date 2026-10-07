@@ -611,6 +611,18 @@ function drawChart(nowMs){
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.clearRect(0, 0, W, H);
 
+  // personal watermark (Mickey, 7 Oct 2026) — motivation, faint behind everything
+  {
+    const pw0 = W - 68, ph0 = H - 24;
+    c.save();
+    c.globalAlpha = 0.055;
+    c.font = '800 ' + Math.round(Math.min(76, pw0 / 5.5)) + 'px system-ui';
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillStyle = '#f5c542';
+    c.fillText('Mickey', pw0 / 2, ph0 / 2);
+    c.restore();
+  }
+
   const off = Math.min(viewOffset, Math.max(0, bars.length - viewCount));
   const candles = off > 0 ? bars.slice(-(viewCount + off), -off) : bars.slice(-viewCount);
   const AXW = 68, AXH = 24;
