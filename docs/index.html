@@ -537,6 +537,7 @@ function drawChart(nowMs){
   const W = wrap.clientWidth, H = wrap.clientHeight;
   const bars = tfBars(), tfMs = TF_MS[TF];
   if(!W || !H || !bars.length) return;
+  if(viewCount > bars.length) viewCount = tfViewCount();  // heal stale zoom if data arrived after zoom was set
   cv.width = W * dpr; cv.height = H * dpr;
   const c = cv.getContext('2d');
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
