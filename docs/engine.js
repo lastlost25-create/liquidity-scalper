@@ -301,10 +301,14 @@ function track_outcome(signal, barsAfter, maxHoldHours = 24) {
       return { outcome: won ? 'TP' : 'SL', r: won ? signal.rr : -1.0, closed_at: iso(c.t) };
     }
   }
-  // Expired: exit at the deadline bar, never at the end of the data.
-  let exitBar = null;
-  for (const c of barsAfter) { if (c.t > deadline) break; exitBar = c; }
+  // Expired only if the deadline actually passed inside the data.
+  // A trade that hasn't hit TP/SL with time still left is OPEN (null),
+  // not expired — the old code mislabeled every open trade as EXPIRED.
+  let pastDeadline = false, exitBar = null;
+  for (const c of barsAfter) { if (c.t > deadline) { pastDeadline = true; break; } exitBar = c; }
+  if (!pastDeadline) return { outcome: null, r: null };
   const last = exitBar || barsAfter[0];
+  if (!last) return { outcome: null, r: null };
   const r = signal.direction === 'LONG'
     ? (last.c - signal.entry) / Math.abs(signal.entry - signal.sl)
     : (signal.entry - last.c) / Math.abs(signal.entry - signal.sl);
@@ -386,7 +390,12 @@ function build_swing_signals_v2(m1bars, pools, nowMs, dayMs = null, pdl = null, 
   const stats = {};
   const px = v => v.toLocaleString('en-US', { minimumFractionDigits: 2 });
 
-  for (let i = 0; i < scan.length - 2; i++) {
+  // NOTE (7 Oct 2026): bound is length-1, not length-2. The old -2 was a
+  // leftover from v1's confirmation candles and delayed every sniper signal
+  // ~2-3 minutes past its entry — the "very late" blue outline. The sweep
+  // candle is closed and the entry bar's open is fixed, so printing as soon
+  // as the entry bar exists cannot repaint.
+  for (let i = 0; i < scan.length - 1; i++) {
     const sweep = scan[i];
     for (const pool of pools) {
       const formed = (typeof pool.formed_at === 'string') ? new Date(pool.formed_at).getTime() : pool.formed_at;
@@ -482,9 +491,12 @@ function track_swing_outcome(signal, barsAfter, maxHoldHours = 48) {
   }
   if (best > 0) return { outcome: 'TP' + best, r: rrs[best - 1], closed_at: iso(closedAt) };
   if (stopped) return { outcome: 'SL', r: -1.0, closed_at: iso(closedAt) };
-  // Expired: exit at the deadline bar, never at the end of the data.
-  let sexitBar = null;
-  for (const c of barsAfter) { if (c.t > deadline) break; sexitBar = c; }
+  // Expired only if the deadline actually passed inside the data.
+  // A trade that hasn't hit TP/SL with time still left is OPEN (null),
+  // not expired — the old code mislabeled every open trade as EXPIRED.
+  let pastDeadline = false, sexitBar = null;
+  for (const c of barsAfter) { if (c.t > deadline) { pastDeadline = true; break; } sexitBar = c; }
+  if (!pastDeadline) return { outcome: null, r: null };
   const last = sexitBar || barsAfter[0];
   if (!last) return { outcome: null, r: null };
   const r = signal.direction === 'LONG'
