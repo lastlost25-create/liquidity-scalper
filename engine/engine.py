@@ -444,8 +444,10 @@ def track_outcome(signal, m1_after, max_hold_hours=24):
                 "r": round(r, 2),
                 "closed_at": ts.isoformat(),
             }
-    # Expired: exit at the deadline bar (last bar at/before the deadline),
-    # never at the end of the available dataset.
+    # Expired only if the deadline actually passed inside the data.
+    # A trade that hasn't hit TP/SL with time left is OPEN (None), not expired.
+    if len(m1_after) == 0 or m1_after.index[-1] <= deadline:
+        return {"outcome": None, "r": None}
     window = m1_after[m1_after.index <= deadline]
     if len(window):
         exit_ts, exit_px = window.index[-1], float(window.iloc[-1]["close"])
@@ -787,7 +789,10 @@ def build_swing_signals_v2(m1, pools, cfg=CONFIG, now=None, date_filter=None,
     used = set()  # one signal per pool id per day
     signals = []
     n = len(scan)
-    for i in range(n - 2):
+    # NOTE (7 Oct 2026): n-1, not n-2. The old n-2 was a leftover from v1's
+    # confirmation candles and delayed every sniper signal ~2-3 minutes past
+    # its entry. Sweep candle is closed, entry bar open is fixed: no repaint.
+    for i in range(n - 1):
         sweep = scan.iloc[i]
         ts = scan.index[i]
         for pool in pools:
@@ -959,8 +964,10 @@ def track_swing_outcome(signal, m1_after, max_hold_hours=48):
         return {"outcome": "SL", "r": -1.0, "closed_at": closed_at.isoformat()}
     if len(m1_after) == 0:
         return {"outcome": None, "r": None}
-    # Expired: exit at the deadline bar (last bar at/before the deadline),
-    # never at the end of the available dataset.
+    # Expired only if the deadline actually passed inside the data.
+    # A trade that hasn't hit TP/SL with time left is OPEN (None), not expired.
+    if m1_after.index[-1] <= deadline:
+        return {"outcome": None, "r": None}
     window = m1_after[m1_after.index <= deadline]
     if len(window):
         exit_ts, exit_px = window.index[-1], float(window.iloc[-1]["close"])
