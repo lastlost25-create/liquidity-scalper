@@ -198,7 +198,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=3"></script>
+<script src="engine.js?v=4"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -387,6 +387,18 @@ function prevDayHL(nowMs){
   return prev ? { pdl: prev.l, pdh: prev.h } : { pdl: null, pdh: null };
 }
 
+/* Today's daily open — the "algo trigger line" (StockLearners video 3):
+   price snaps where the daily candle flips red/green. Backtested 7 Oct 2026
+   as a TP target only (+4.357R → +5.462R/trade, 23.8% WR); as an entry
+   trigger it loses money, so it is a target, never a sweep pool. Known from
+   the first tick of the day — zero lookahead for the 06:00 UTC killzone. */
+function dailyOpen(nowMs){
+  if(!D1.length) return null;
+  const dayStart = Date.UTC(new Date(nowMs).getUTCFullYear(), new Date(nowMs).getUTCMonth(), new Date(nowMs).getUTCDate());
+  const bar = [...D1].reverse().find(b => b.t >= dayStart && b.o != null);
+  return bar ? bar.o : null;
+}
+
 /* ---------------- engine ---------------- */
 function recompute(){
   const nowMs = Date.now();
@@ -413,7 +425,7 @@ function recompute(){
   // calibrated 6 Oct 2026). Pools ARE the levels (his "4h + 1h swing low").
   {
     const { pdl, pdh } = prevDayHL(nowMs);
-    const swr = LS.build_swing_signals_v2(m1sig, pools, nowMs, null, pdl, pdh, 'extreme');
+    const swr = LS.build_swing_signals_v2(m1sig, pools, nowMs, null, pdl, pdh, 'extreme', dailyOpen(nowMs));
     swingSignalsToday = swr.signals.map(s => {
       const after = m1c.filter(b => b.t > Date.parse(s.signal_at));
       return after.length ? Object.assign({}, s, LS.track_swing_outcome(s, after))
