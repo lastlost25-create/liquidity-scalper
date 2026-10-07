@@ -84,6 +84,8 @@
   .tag{font-size:9px;padding:1px 7px;border-radius:12px;background:var(--bg);
     border:1px solid var(--line);color:var(--dim);margin-left:4px;white-space:nowrap}
   .tag.prem{color:var(--gold);border-color:var(--gold)}
+  .tag.major{color:#f5c542;border-color:#f5c542;font-weight:700}
+  .tag.minor{color:#8a93a8}
   .dist{color:var(--dim);font-family:ui-monospace,Menlo,monospace;font-size:10px}
   #logPanel{left:10px;bottom:10px;max-width:340px;max-height:38%;overflow-y:auto}
   #logPanel table{width:100%;border-collapse:collapse;font-size:11px}
@@ -413,8 +415,10 @@ let flashSig = null;       // signal_at of a just-resolved trade (pulse banner)
 
 /* ---------------- panels ---------------- */
 function poolRow(p){
+  const g = p.grade === 'major' ? '<span class="tag major">MAJOR</span>'
+          : '<span class="tag minor">MINOR</span>';
   return `<div class="pool"><span class="p">${p.price.toFixed(2)}</span>`
-    + `<span><span class="tag">${p.tf}</span><span class="tag ${p.premium?'prem':''}">${p.premium?'★':'pool'}</span></span>`
+    + `<span><span class="tag">${p.tf}</span>${g}</span>`
     + `<span class="dist">$${p.distance.toFixed(2)}</span></div>`;
 }
 
@@ -570,20 +574,29 @@ function drawChart(nowMs){
     c.fillStyle = '#b9c1d4'; c.fillText(v.toFixed(1), pw + 6, yy + 4);
   }
 
-  const band = (p, fill, edge) => {
-    const y1 = y(p.price + .30), y2 = y(p.price - .30);
-    c.fillStyle = fill; c.fillRect(0, y1, pw, y2 - y1);
-    if(edge){
-      c.strokeStyle = edge; c.setLineDash([5, 4]); c.lineWidth = 1.2;
-      c.beginPath(); c.moveTo(0, (y1+y2)/2); c.lineTo(pw, (y1+y2)/2); c.stroke();
-      c.setLineDash([]); c.lineWidth = 1;
+  const band = (p, rgb) => {
+    const major = p.grade === 'major';
+    const half = major ? .30 : .18;                 // major zones are taller
+    const y1 = y(p.price + half), y2 = y(p.price - half), mid = (y1 + y2) / 2;
+    c.fillStyle = `rgba(${rgb},${major ? .16 : .07})`;
+    c.fillRect(0, y1, pw, y2 - y1);
+    if (major) {                                     // solid bright edge
+      c.strokeStyle = `rgb(${rgb})`; c.lineWidth = 1.6;
+      c.beginPath(); c.moveTo(0, mid); c.lineTo(pw, mid); c.stroke(); c.lineWidth = 1;
+    } else {                                         // thin dashed edge
+      c.strokeStyle = 'rgba(107,116,136,.55)'; c.setLineDash([4, 4]);
+      c.beginPath(); c.moveTo(0, mid); c.lineTo(pw, mid); c.stroke(); c.setLineDash([]);
     }
-    c.fillStyle = edge || '#6b7488';
-    c.fillText(p.tf + (p.premium ? ' ★' : ''), 6, (y1 + y2) / 2 - 4);
+    const _f = c.font;
+    c.font = (major ? '700 11px' : '500 10px') + ' system-ui';
+    c.fillStyle = major ? '#f5c542' : '#8a93a8';
+    c.fillText((major ? 'MAJOR ' : '') + p.tf + (p.touches >= 2 ? ' ★×' + p.touches : ''),
+               6, mid - 4);
+    c.font = _f;
   };
   const price = price0;
-  pmap.above.forEach(p => band(p, 'rgba(239,68,68,.08)', p.premium ? '#d4a93c' : null));
-  pmap.below.forEach(p => band(p, 'rgba(34,197,94,.08)', p.premium ? '#d4a93c' : null));
+  pmap.above.forEach(p => band(p, '239,68,68'));    // sell-side liquidity = red
+  pmap.below.forEach(p => band(p, '34,197,94'));    // buy-side liquidity = green
 
   const n = candles.length, cw = pw / n;
   // entry-candle indices for today's signals (blue outline) — mapped to the
