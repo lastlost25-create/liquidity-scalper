@@ -69,6 +69,7 @@
     border-color:#7a5b12}
   #rulesPanel.open{display:block}
   #rulesTab.active{border-color:var(--gold);color:var(--gold)}
+  #advTab.active{border-color:var(--gold);color:var(--gold)}
   #rulesPanel h2{color:var(--gold)}
   #rulesPanel .rsub{font-size:10px;color:var(--dim);margin:-4px 0 6px}
   .rule{display:flex;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);
@@ -124,6 +125,7 @@
   <button class="sym" id="poolTab" title="tap to show/hide liquidity pools">POOLS</button>
   <button class="sym" id="rulesTab" title="tap to show/hide discipline rules">RULES</button>
   <button class="sym" id="sndBtn" title="tap to mute/unmute the new-signal sound">🔊</button>
+  <button class="sym" id="advTab" title="tap to show major 4H + Daily reversal levels">ADV REV</button>
   <span class="badge" id="fresh">···</span>
   <div id="price">–</div>
   <span class="badge" id="trend">H1 ···</span>
@@ -210,6 +212,7 @@ let FEED = null;                     // 'yahoo' | 'paxg'
 let M1 = [], H1 = [], H4 = [], D1 = []; // M1 includes the forming candle last
 let pools = [], signalsToday = [];
 let swingSignalsToday = [];   // v2 sniper swing setups (HTF pool -> M1 reclaim)
+let advRevOn = false;             // advance-reversal levels view (4H + Daily majors)
 let ws = null, wsFails = 0, pollTimer = null, lastPrice = 0;
 let yahooFails = 0, yahooRetryTimer = null, lastWSMsg = 0;
 
@@ -631,8 +634,15 @@ function drawChart(nowMs){
   const consider = v => { if(v < lo) lo = v; if(v > hi) hi = v; };
   candles.forEach(k => { consider(k.l); consider(k.h); });
   const price0 = M1[M1.length-1].c;
+  const advMode = advRevOn && D1.length > 10;
+  let adv = null;
+  if (advMode) {
+    const d1c = LS.closed_only(D1, nowMs);
+    adv = LS.adv_major_levels(price0, pools.filter(p => p.tf === 'H4'),
+                              LS.detect_daily_levels(d1c, nowMs));
+  }
   const pmap = LS.liquidity_map(price0, pools);   // only drawn pools set the axis
-  pmap.above.concat(pmap.below).forEach(p => consider(p.price));
+  if (!advMode) pmap.above.concat(pmap.below).forEach(p => consider(p.price));
   const act = marketOpen(nowMs) ? activeSignal(nowMs) : null;
   if(act){
     [act.entry, act.sl, act.tp, act.tp2, act.tp3].forEach(v => { if(v != null) consider(v); });
@@ -673,8 +683,47 @@ function drawChart(nowMs){
     c.font = _f;
   };
   const price = price0;
-  pmap.above.forEach(p => band(p, '239,68,68'));    // sell-side liquidity = red
-  pmap.below.forEach(p => band(p, '34,197,94'));    // buy-side liquidity = green
+  // Advance-reversal view: major 4H + Daily zones in gold; the nearest major
+  // beyond the visible range is pinned to the chart edge — levels in advance.
+  const drawAdv = (adv, lo, hi) => {
+    const zones = adv.above.concat(adv.below);
+    for (const z of zones) {
+      if (z.price < lo || z.price > hi) continue;
+      const y1 = y(z.price + .30), y2 = y(z.price - .30), mid = (y1 + y2) / 2;
+      const major = z.grade === 'major';
+      c.fillStyle = major ? 'rgba(245,197,66,.14)' : 'rgba(245,197,66,.06)';
+      c.fillRect(0, y1, pw, y2 - y1);
+      c.strokeStyle = major ? '#f5c542' : 'rgba(245,197,66,.45)';
+      c.lineWidth = major ? 1.6 : 1;
+      if (!major) c.setLineDash([4, 4]);
+      c.beginPath(); c.moveTo(0, mid); c.lineTo(pw, mid); c.stroke();
+      c.setLineDash([]); c.lineWidth = 1;
+      const _f = c.font;
+      c.font = (major ? '700 11px' : '500 10px') + ' system-ui';
+      c.fillStyle = major ? '#f5c542' : '#a08c4f';
+      c.fillText((major ? 'ADV MAJOR ' : 'ADV ') + z.tf + ' · ' + z.price.toFixed(2), 6, mid - 4);
+      c.font = _f;
+    }
+    const pin = (z, top) => {
+      if (!z) return;
+      const yy = top ? 1.5 : ph - 1.5;
+      c.strokeStyle = '#f5c542'; c.setLineDash([6, 4]); c.lineWidth = 1.2;
+      c.beginPath(); c.moveTo(0, yy); c.lineTo(pw, yy); c.stroke();
+      c.setLineDash([]); c.lineWidth = 1;
+      const _f = c.font;
+      c.font = '700 11px system-ui'; c.fillStyle = '#f5c542';
+      c.fillText((top ? '▲ ' : '▼ ') + z.price.toFixed(2), pw + 6, top ? 12 : ph - 6);
+      c.font = _f;
+    };
+    const majors = zones.filter(z => z.grade === 'major');
+    pin(majors.filter(z => z.price > hi).sort((a, b) => a.price - b.price)[0], true);
+    pin(majors.filter(z => z.price < lo).sort((a, b) => b.price - a.price)[0], false);
+  };
+  if (advMode && adv) drawAdv(adv, lo, hi);
+  else {
+    pmap.above.forEach(p => band(p, '239,68,68'));    // sell-side liquidity = red
+    pmap.below.forEach(p => band(p, '34,197,94'));    // buy-side liquidity = green
+  }
 
   const n = candles.length, cw = pw / n;
   // entry-candle indices for today's signals (blue outline) — mapped to the
@@ -1118,6 +1167,11 @@ async function boot(){
     const p = $('rulesPanel'), t = $('rulesTab');
     const open = p.classList.toggle('open');
     t.classList.toggle('active', open);
+  });
+  $('advTab').addEventListener('click', () => {
+    advRevOn = !advRevOn;
+    $('advTab').classList.toggle('active', advRevOn);
+    recompute();
   });
   $('sndBtn').addEventListener('click', () => {
     soundOn = !soundOn;
