@@ -530,17 +530,83 @@ function suppress_overlapping(signals) {
   return kept;
 }
 
+/* ----------------------------------------------------------------------------
+ * ADVANCE REVERSAL LEVELS (Mickey, 7 Oct 2026) — the major liquidity map from
+ * 4H + Daily, shown in advance on the chart. Daily fractal swings (2,2),
+ * merged within $1.00. Display-only: no signal logic changes.
+ * -------------------------------------------------------------------------- */
+function detect_daily_levels(d1bars, nowMs) {
+  const maxAge = nowMs - CONFIG.pool_max_age_days * DAY_MS;
+  const [highs, lows] = fractals(d1bars, 2, 2);
+  const pools = [];
+  let pid = 0;
+  for (const [side, swings] of [['high', highs], ['low', lows]]) {
+    for (const [ts, price] of swings) {
+      if (ts < maxAge) continue;
+      let merged = null;
+      for (const p of pools) {
+        if (p.side === side && Math.abs(p.price - price) <= 1.00) { merged = p; break; }
+      }
+      if (merged) {
+        merged.touches += 1;
+        merged.price = (merged.price * (merged.touches - 1) + price) / merged.touches;
+        merged.formed_at = Math.max(merged.formed_at, ts);
+      } else {
+        pid += 1;
+        pools.push({
+          id: `D1-${side}-${pid}`, tf: 'D1', side,
+          price: round2(price), touches: 1, premium: false, formed_at: ts,
+        });
+      }
+    }
+  }
+  return pools;
+}
+
+// Merge H4 + D1 pools into major zones for the advance-reversal view.
+// Returns { above, below }: every MAJOR zone sorted by distance from price.
+function adv_major_levels(price, h4pools, d1pools, tol = 1.00) {
+  const zones = [];
+  const used = new Set();
+  const sorted = [...h4pools, ...d1pools].sort((a, b) => a.price - b.price);
+  for (const p of sorted) {
+    if (used.has(p.id)) continue;
+    const group = [p];
+    for (const q of sorted) {
+      if (q.id !== p.id && !used.has(q.id) && q.side === p.side &&
+          Math.abs(q.price - p.price) <= tol) {
+        group.push(q); used.add(q.id);
+      }
+    }
+    used.add(p.id);
+    const tfs = [...new Set(group.map(g => g.tf))].sort().join('+');
+    const zp = round2(group.reduce((s, g) => s + g.price, 0) / group.length);
+    const touches = Math.max(...group.map(g => g.touches));
+    const crossTF = new Set(group.map(g => g.tf)).size > 1;
+    const grade = (crossTF || touches >= 3) ? 'major'
+                : (touches >= 2 || tfs === 'D1' || tfs === 'H4') ? 'minor' : 'tiny';
+    if (grade === 'tiny') continue;
+    zones.push({ id: group.map(g => g.id).join('+'), tf: tfs, side: p.side,
+                 price: zp, touches, grade, premium: touches >= 2 });
+  }
+  const above = zones.filter(z => z.price >= price).sort((a, b) => a.price - b.price);
+  const below = zones.filter(z => z.price < price).sort((a, b) => b.price - a.price);
+  return { above, below };
+}
+
 // Node + browser export
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CONFIG, fractals, detect_pools, structure_trend, session_of, next_session, session_countdown,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
-    track_outcome, track_swing_outcome, suppress_overlapping, liquidity_map, iso, utcDay, DAY_MS,
+    track_outcome, track_swing_outcome, suppress_overlapping, liquidity_map,
+    detect_daily_levels, adv_major_levels, iso, utcDay, DAY_MS,
   };
 } else if (typeof window !== 'undefined') {
   window.LS = {
     CONFIG, fractals, detect_pools, structure_trend, session_of, next_session, session_countdown,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
-    track_outcome, track_swing_outcome, suppress_overlapping, liquidity_map, iso, utcDay, DAY_MS,
+    track_outcome, track_swing_outcome, suppress_overlapping, liquidity_map,
+    detect_daily_levels, adv_major_levels, iso, utcDay, DAY_MS,
   };
 }
