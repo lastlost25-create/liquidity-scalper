@@ -461,7 +461,7 @@ function drawChart(nowMs){
 
   const off = Math.min(viewOffset, Math.max(0, M1.length - viewCount));
   const candles = off > 0 ? M1.slice(-(viewCount + off), -off) : M1.slice(-viewCount);
-  const AXW = 60, AXH = 22;
+  const AXW = 68, AXH = 24;
   const pw = W - AXW, ph = H - AXH;
   let lo = Infinity, hi = -Infinity;
   const consider = v => { if(v < lo) lo = v; if(v > hi) hi = v; };
@@ -480,12 +480,12 @@ function drawChart(nowMs){
   lo -= pad; hi += pad;
   const y = v => ph - (v - lo) / (hi - lo) * ph;
 
-  c.lineWidth = 1; c.font = '10px system-ui';
+  c.lineWidth = 1; c.font = '600 12px system-ui';
   for(let i = 0; i <= 5; i++){
     const v = lo + (hi - lo) * i / 5, yy = Math.round(y(v)) + .5;
-    c.strokeStyle = '#141b28';
+    c.strokeStyle = '#1c2434';
     c.beginPath(); c.moveTo(0, yy); c.lineTo(pw, yy); c.stroke();
-    c.fillStyle = '#5b6478'; c.fillText(v.toFixed(1), pw + 6, yy + 3);
+    c.fillStyle = '#b9c1d4'; c.fillText(v.toFixed(1), pw + 6, yy + 4);
   }
 
   const band = (p, fill, edge) => {
@@ -527,10 +527,10 @@ function drawChart(nowMs){
     }
   }
 
-  c.fillStyle = '#5b6478';
+  c.fillStyle = '#9aa3b8'; c.font = '11px system-ui';
   const labStep = n > 150 ? 30 : n > 80 ? 15 : 5;
   for(let i = 0; i < n; i += labStep){
-    c.fillText(fmtT(candles[i].t), i * cw + cw / 2 - 14, H - 7);
+    c.fillText(fmtT(candles[i].t), i * cw + cw / 2 - 14, H - 8);
   }
 
   const level = (v, color, label, dash) => {
@@ -751,9 +751,11 @@ async function refreshHigherTFs(){
 
 /* ---------------- chart gestures: pinch / wheel zoom, double-tap reset ---------------- */
 function defaultViewCount(){
-  // keep candles ~5px wide so the chart stays readable on any screen
-  const pw = ($('chartWrap') ? $('chartWrap').clientWidth : 360) - 60;
-  return Math.max(40, Math.min(600, Math.round(pw / 5)));
+  // keep candles readable on any screen: fatter (~8px) on phones, ~5px on desktop
+  const W = $('chartWrap') ? $('chartWrap').clientWidth : 360;
+  const target = W < 640 ? 8 : 5;
+  const pw = W - 68;
+  return Math.max(30, Math.min(600, Math.round(pw / target)));
 }
 let viewCount = 240;                       // visible candles, anchored to the live edge
 let viewOffset = 0;                      // candles panned back from the live edge (drag to scroll)
