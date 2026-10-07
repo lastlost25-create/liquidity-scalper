@@ -126,6 +126,7 @@
   <button class="sym" id="poolTab" title="tap to show/hide liquidity pools">POOLS</button>
   <button class="sym" id="rulesTab" title="tap to show/hide discipline rules">RULES</button>
   <button class="sym" id="sndBtn" title="tap to mute/unmute the new-signal sound">🔊</button>
+  <button class="sym" id="snapBtn" title="snapshot the chart as a PNG image to share">📸</button>
   <span class="viewtabs" title="chart setups — SNIPER is the live signal setup">
     <button class="sym viewtab active" data-view="sniper" title="current sniper setup — live signals">SNIPER</button>
     <button class="sym viewtab" data-view="adv" title="major 4H + Daily reversal levels in advance">ADV REV</button>
@@ -1222,8 +1223,41 @@ async function boot(){
     $('sndBtn').textContent = soundOn ? '🔊' : '🔇';
     if (soundOn) beep(880, .12, 0);   // confirmation blip (also unlocks audio)
   });
+  $('snapBtn').addEventListener('click', snapshotChart);
   document.querySelectorAll('#tfbar .tf').forEach(b =>
     b.addEventListener('click', () => setTF(b.dataset.tf)));
+}
+
+/* Chart snapshot (Mickey, 7 Oct 2026): one tap on 📸 saves the current chart
+   as a PNG (with setup tab + timestamp stamped on it) so it can be shared
+   straight into the chat for chart talk. */
+function snapshotChart(){
+  const cv = $('chart');
+  if(!cv || !cv.width) return;
+  try {
+    const out = document.createElement('canvas');
+    out.width = cv.width; out.height = cv.height;
+    const c = out.getContext('2d');
+    c.fillStyle = '#0a0e14';
+    c.fillRect(0, 0, out.width, out.height);
+    c.drawImage(cv, 0, 0);
+    // stamp: setup tab + UTC time, so a shared shot is self-describing
+    const fs = Math.max(28, Math.round(out.width / 42));
+    c.font = '700 ' + fs + 'px system-ui';
+    c.fillStyle = 'rgba(245,197,66,.92)';
+    const stamp = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+    c.fillText(chartTab.toUpperCase() + ' · ' + stamp, fs * 0.7, fs * 1.4);
+    const a = document.createElement('a');
+    a.download = 'sniper-' + chartTab + '-' +
+      new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.png';
+    a.href = out.toDataURL('image/png');
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch(e) {
+    const er = $('err');
+    if(er){ er.textContent = 'Snapshot failed: ' + e.message; er.style.display = 'block'; }
+  }
 }
 boot();
 </script>
