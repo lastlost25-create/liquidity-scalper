@@ -220,7 +220,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=7"></script>
+<script src="engine.js?v=8"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -886,6 +886,62 @@ function drawChart(nowMs){
     c.fillStyle = '#f5c542'; c.fillRect(pw, yy - 10, AXW, 20);
     c.fillStyle = '#0a0e14'; c.fillText(txt, pw + (AXW - tw) / 2, yy + 4);
   }
+  /* ---- crosshair + OHLC inspector (hover/tap): MT5 data-window style ---- */
+  if(XH.on && n > 0){
+    const mxi = Math.max(0, Math.min(n - 1, Math.floor(Math.max(0, Math.min(pw - 1, XH.x)) / cw)));
+    const k = candles[mxi], xc = mxi * cw + cw / 2;
+    const cy = Math.max(0, Math.min(ph, XH.y));
+    const up = k.c >= k.o, kcol = up ? '#22c55e' : '#ef4444';
+    c.save();
+    c.strokeStyle = 'rgba(190,200,220,.55)'; c.lineWidth = 1; c.setLineDash([5, 4]);
+    c.beginPath(); c.moveTo(Math.round(xc) + .5, 0); c.lineTo(Math.round(xc) + .5, ph); c.stroke();
+    c.beginPath(); c.moveTo(0, Math.round(cy) + .5); c.lineTo(pw, Math.round(cy) + .5); c.stroke();
+    c.setLineDash([]);
+    // price tag on the right axis (price under the cursor)
+    const pv = lo + (ph - cy) / ph * (hi - lo), ptxt = pv.toFixed(2);
+    c.font = '700 12px system-ui';
+    const ptw = c.measureText(ptxt).width;
+    c.fillStyle = '#8fa0bf'; c.fillRect(pw, cy - 10, AXW, 20);
+    c.fillStyle = '#0a0e14'; c.fillText(ptxt, pw + (AXW - ptw) / 2, cy + 4);
+    // time tag on the bottom axis (hovered candle's time)
+    const ttxt = fmtFullT(k.t);
+    c.font = '700 11px system-ui';
+    const ttw = c.measureText(ttxt).width;
+    let tx0 = Math.max(2, Math.min(W - ttw - 14, xc - ttw / 2 - 6));
+    c.fillStyle = '#8fa0bf'; c.fillRect(tx0, ph, ttw + 12, AXH);
+    c.fillStyle = '#0a0e14'; c.fillText(ttxt, tx0 + 6, ph + 16);
+    // OHLC tooltip card near the cursor
+    const chg = k.c - k.o, chgp = k.o ? chg / k.o * 100 : 0;
+    const lines = [
+      fmtFullT(k.t),
+      'O ' + k.o.toFixed(2) + '   H ' + k.h.toFixed(2),
+      'L ' + k.l.toFixed(2) + '   C ' + k.c.toFixed(2),
+      (up ? '▲ +' : '▼ −') + Math.abs(chg).toFixed(2) + ' (' + (chgp >= 0 ? '+' : '') + chgp.toFixed(2) + '%)'
+    ];
+    c.font = '600 11px system-ui';
+    let bw2 = 0;
+    lines.forEach(t => { bw2 = Math.max(bw2, c.measureText(t).width); });
+    bw2 += 18;
+    const bh2 = lines.length * 15 + 14;
+    let bx = xc + 16, by = cy - bh2 - 10;
+    if(bx + bw2 > pw - 2) bx = xc - 16 - bw2;
+    if(bx < 2) bx = 2;
+    if(by < 2) by = cy + 16;
+    if(by + bh2 > ph - 2) by = ph - bh2 - 2;
+    c.fillStyle = 'rgba(8,12,18,.9)';
+    c.strokeStyle = 'rgba(140,150,170,.4)'; c.lineWidth = 1;
+    c.beginPath();
+    if(c.roundRect) c.roundRect(bx, by, bw2, bh2, 6); else c.rect(bx, by, bw2, bh2);
+    c.fill(); c.stroke();
+    c.textBaseline = 'top';
+    c.fillStyle = '#e8ecf4'; c.fillText(lines[0], bx + 9, by + 8);
+    c.fillStyle = '#aeb8cf';
+    c.fillText(lines[1], bx + 9, by + 8 + 15);
+    c.fillText(lines[2], bx + 9, by + 8 + 30);
+    c.fillStyle = kcol; c.font = '700 11px system-ui';
+    c.fillText(lines[3], bx + 9, by + 8 + 45);
+    c.restore();
+  }
 }
 
 /* ---- session countdown clock (header badge, ticks every second) ---- */
@@ -1096,6 +1152,20 @@ async function refreshHigherTFs(){
   } catch(e){}
 }
 
+/* ---- MT5-style crosshair + OHLC inspector (Mickey, 7 Oct 2026):
+   hover a candle (desktop) or tap it (touch) to see its time, O/H/L/C,
+   change, and the exact price under the cursor ---- */
+let XH = { on:false, x:0, y:0 };
+const fmtFullT = ms => TF === 'D1'
+  ? new Date(ms).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric', timeZone:'UTC' })
+  : new Date(ms).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:false, timeZone:PKT }) + ' PKT';
+function setXH(clientX, clientY){
+  const cv = $('chart'), r = cv.getBoundingClientRect();
+  XH = { on:true, x: clientX - r.left, y: clientY - r.top };
+  drawChart(Date.now());
+}
+function hideXH(){ if(XH.on){ XH.on = false; drawChart(Date.now()); } }
+
 /* ---------------- chart gestures: pinch / wheel zoom, double-tap reset ---------------- */
 function defaultViewCount(){
   // keep candles readable on any screen: fatter (~8px) on phones, ~5px on desktop
@@ -1117,8 +1187,8 @@ function applyZoom(factor){
   const cv = $('chart');
   cv.style.cursor = 'grab';
   const touchPts = new Map();   // touch pointers, for pinch only
-  let pinchD = 0, lastTap = 0;
-  let dragging = false, dragX = 0, dragOff = 0;
+  let pinchD = 0, lastTap = 0, justReset = 0;
+  let dragging = false, dragX = 0, dragOff = 0, downX = 0, downY = 0, downT = 0;
   const pinchDist = () => { const [a, b] = [...touchPts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
   const candleW = () => Math.max(2, (cv.clientWidth - 68) / viewCount);
   const maxOff = () => Math.max(0, tfBars().length - viewCount);
@@ -1132,7 +1202,9 @@ function applyZoom(factor){
   const endDrag = () => { dragging = false; cv.style.cursor = 'grab'; };
   cv.addEventListener('pointerdown', e => {
     const now = Date.now();
-    if(now - lastTap < 300 && !dragging){ viewCount = tfViewCount(); viewOffset = 0; userZoomed = false; drawChart(now); }  // double-tap resets
+    downX = e.clientX; downY = e.clientY; downT = now;
+    if(e.pointerType !== 'mouse') XH.on = false;   // touch press starts pan/zoom — clear the inspector (mouse keeps hover)
+    if(now - lastTap < 300 && !dragging){ viewCount = tfViewCount(); viewOffset = 0; userZoomed = false; justReset = now; drawChart(now); }  // double-tap resets
     lastTap = now;
     touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { cv.setPointerCapture(e.pointerId); } catch(_){}
@@ -1145,11 +1217,22 @@ function applyZoom(factor){
       const d = pinchDist();
       if(pinchD > 0 && d > 0) applyZoom(d / pinchD);
       pinchD = d;
-    } else if(dragging){ panTo(e.clientX); }
+    } else if(dragging){ if(e.pointerType === 'mouse') XH.on = false; panTo(e.clientX); }
+    else if(e.pointerType === 'mouse'){ setXH(e.clientX, e.clientY); }  // hover inspector (desktop)
   });
-  const pend = e => { touchPts.delete(e.pointerId); if(touchPts.size < 2) pinchD = 0; if(touchPts.size === 0) endDrag(); };
+  const pend = e => {
+    // a quick tap (not a pan, not a pinch) inspects the candle — touch equivalent of hover
+    const tap = e.pointerType !== 'mouse' && pinchD === 0 && touchPts.size === 1 &&
+      Math.hypot(e.clientX - downX, e.clientY - downY) < 12 && (Date.now() - downT) < 600 &&
+      (Date.now() - justReset) > 350;
+    touchPts.delete(e.pointerId);
+    if(touchPts.size < 2) pinchD = 0;
+    if(touchPts.size === 0) endDrag();
+    if(tap) setXH(e.clientX, e.clientY);
+  };
   cv.addEventListener('pointerup', pend);
   cv.addEventListener('pointercancel', pend);
+  cv.addEventListener('pointerleave', e => { if(e.pointerType === 'mouse') hideXH(); });
   // mouse fallback: if pointer events misbehave in an environment, plain
   // mouse events still drive the same idempotent pan
   cv.addEventListener('mousedown', e => startDrag(e.clientX));
