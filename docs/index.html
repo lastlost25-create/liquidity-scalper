@@ -59,6 +59,12 @@
   #poolPanel{top:10px;right:10px;width:212px;max-height:46%;overflow-y:auto;display:none}
   #poolPanel.open{display:block}
   #poolTab.active{border-color:var(--gold);color:var(--gold)}
+  #tfbar{display:flex;gap:6px;padding:6px 12px;background:var(--card);
+    border-bottom:1px solid var(--line);flex:0 0 auto;z-index:20}
+  button.tf{flex:1;background:none;border:1px solid #2a3348;border-radius:6px;
+    padding:4px 0;cursor:pointer;font:inherit;font-size:11px;color:var(--dim)}
+  button.tf.active{border-color:var(--gold);color:var(--gold);font-weight:700}
+  button.tf:active{transform:scale(.96)}
   #rulesPanel{right:10px;bottom:10px;width:252px;max-height:56%;overflow-y:auto;display:none;
     border-color:#7a5b12}
   #rulesPanel.open{display:block}
@@ -116,6 +122,14 @@
   <div id="price">–</div>
   <span class="badge" id="trend">H1 ···</span>
   <span class="badge" id="session">···</span>
+</div>
+
+<div id="tfbar">
+  <button class="tf active" data-tf="M1">M1</button>
+  <button class="tf" data-tf="M15">M15</button>
+  <button class="tf" data-tf="H1">H1</button>
+  <button class="tf" data-tf="H4">H4</button>
+  <button class="tf" data-tf="D1">1D</button>
 </div>
 
 <div id="stage">
@@ -189,6 +203,68 @@ let swingSignalsToday = [];   // v2 sniper swing setups (HTF pool -> M1 reclaim)
 let ws = null, wsFails = 0, pollTimer = null, lastPrice = 0;
 let yahooFails = 0, yahooRetryTimer = null, lastWSMsg = 0;
 
+/* ---- display timeframes: the engine always runs on M1; the chart can show
+   M1 / M15 / H1 / H4 / 1D. M15 is aggregated live from the M1 store; H1/H4/1D
+   use the native higher-TF stores (already fetched for the engine) with the
+   forming bar patched live from the latest tick. ---- */
+const TFS = ['M1','M15','H1','H4','D1'];
+const TF_MS = { M1:60000, M15:900000, H1:3600000, H4:14400000, D1:86400000 };
+let TF = 'M1';
+let M15 = [];
+function aggregate(bars, tfMs){
+  const out = [];
+  for(const b of bars){
+    const key = Math.floor(b.t / tfMs) * tfMs;
+    const last = out[out.length - 1];
+    if(!last || last.t !== key) out.push({ t:key, o:b.o, h:b.h, l:b.l, c:b.c });
+    else { if(b.h > last.h) last.h = b.h; if(b.l < last.l) last.l = b.l; last.c = b.c; }
+  }
+  return out;
+}
+function tfBars(){
+  return TF === 'M1' ? M1 : TF === 'M15' ? M15 : TF === 'H1' ? H1 : TF === 'H4' ? H4 : D1;
+}
+function refreshM15(){ M15 = aggregate(M1, TF_MS.M15); }
+function patchForming(){
+  // keep the forming higher-TF bar moving with the latest tick between the
+  // 5-minute higher-TF refreshes (engine uses closed bars only — unaffected)
+  const nowMs = Date.now();
+  const px = M1.length ? M1[M1.length-1].c : null;
+  if(px == null) return;
+  const pairs = [[H1, TF_MS.H1], [H4, TF_MS.H4], [D1, TF_MS.D1]];
+  for(const [store, ms] of pairs){
+    const b = store[store.length - 1];
+    if(b && nowMs >= b.t && nowMs < b.t + ms){
+      if(px > b.h) b.h = px;
+      if(px < b.l) b.l = px;
+      b.c = px;
+    }
+  }
+}
+/* index of the candle containing ms (falls back to the nearest candle) */
+function candleIdx(candles, ms, tfMs){
+  for(let i = 0; i < candles.length; i++){
+    if(candles[i].t <= ms && ms < candles[i].t + tfMs) return i;
+  }
+  for(let i = 0; i < candles.length; i++){ if(candles[i].t >= ms) return i; }
+  return candles.length - 1;
+}
+const fmtAxis = ms => TF === 'D1'
+  ? new Date(ms).toLocaleDateString('en-GB', { day:'2-digit', month:'short', timeZone:'UTC' })
+  : TF === 'H4'
+  ? new Date(ms).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:false, timeZone:PKT })
+  : fmtT(ms);
+function setTF(tf){
+  if(!TFS.includes(tf) || tf === TF) return;
+  TF = tf;
+  viewOffset = 0;   // re-anchor to the live edge on switch
+  document.querySelectorAll('#tfbar .tf').forEach(b =>
+    b.classList.toggle('active', b.dataset.tf === tf));
+  applyFeedLabel();
+  const [nowMs, m1c, h1c, h4c] = closedView();
+  render(nowMs, m1c, h1c, h4c);
+}
+
 const $ = id => document.getElementById(id);
 const fmtT = ms => new Date(ms).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:PKT});
 const fmtD = ms => new Date(ms).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:PKT});
@@ -232,10 +308,10 @@ async function paxgKlines(interval, limit){
 }
 function applyFeedLabel(){
   if(FEED === 'yahoo'){
-    $('symLabel').innerHTML = 'XAUUSD · 1m <span style="opacity:.5">⇄</span>';
+    $('symLabel').innerHTML = 'XAUUSD · ' + TF + ' <span style="opacity:.5">⇄</span>';
     $('feedNote').textContent = 'XAUUSD spot via Yahoo Finance · close to Exness/OANDA · tap label to switch';
   } else {
-    $('symLabel').innerHTML = 'PAXG · 1m ≈ XAUUSD <span style="opacity:.5">⇄</span>';
+    $('symLabel').innerHTML = 'PAXG · ' + TF + ' ≈ XAUUSD <span style="opacity:.5">⇄</span>';
     $('feedNote').textContent = 'PAXG feed (fallback) · tracks XAUUSD within a few $ · tap label to switch';
   }
 }
@@ -445,6 +521,8 @@ function renderPanels(nowMs, h1c, h4c){
 
 /* ---------------- chart ---------------- */
 function render(nowMs, m1c, h1c, h4c){
+  refreshM15();
+  patchForming();
   renderPanels(nowMs, h1c, h4c);
   drawChart(nowMs);
 }
@@ -453,14 +531,15 @@ function drawChart(nowMs){
   const wrap = $('chartWrap'), cv = $('chart');
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
   const W = wrap.clientWidth, H = wrap.clientHeight;
-  if(!W || !H || !M1.length) return;
+  const bars = tfBars(), tfMs = TF_MS[TF];
+  if(!W || !H || !bars.length) return;
   cv.width = W * dpr; cv.height = H * dpr;
   const c = cv.getContext('2d');
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.clearRect(0, 0, W, H);
 
-  const off = Math.min(viewOffset, Math.max(0, M1.length - viewCount));
-  const candles = off > 0 ? M1.slice(-(viewCount + off), -off) : M1.slice(-viewCount);
+  const off = Math.min(viewOffset, Math.max(0, bars.length - viewCount));
+  const candles = off > 0 ? bars.slice(-(viewCount + off), -off) : bars.slice(-viewCount);
   const AXW = 68, AXH = 24;
   const pw = W - AXW, ph = H - AXH;
   let lo = Infinity, hi = -Infinity;
@@ -504,11 +583,11 @@ function drawChart(nowMs){
   pmap.below.forEach(p => band(p, 'rgba(34,197,94,.08)', p.premium ? '#d4a93c' : null));
 
   const n = candles.length, cw = pw / n;
-  // entry-candle indices for today's signals (blue outline)
+  // entry-candle indices for today's signals (blue outline) — mapped to the
+  // candle containing the signal time on the current timeframe
   const entryIdx = new Set();
   for(const s of allSig){
-    const ms = Date.parse(s.signal_at);
-    for(let i = 0; i < n; i++){ if(candles[i].t >= ms){ entryIdx.add(i); break; } }
+    entryIdx.add(candleIdx(candles, Date.parse(s.signal_at), tfMs));
   }
   for(let i = 0; i < n; i++){
     const k = candles[i];
@@ -530,7 +609,7 @@ function drawChart(nowMs){
   c.fillStyle = '#9aa3b8'; c.font = '11px system-ui';
   const labStep = n > 150 ? 30 : n > 80 ? 15 : 5;
   for(let i = 0; i < n; i += labStep){
-    c.fillText(fmtT(candles[i].t), i * cw + cw / 2 - 14, H - 8);
+    c.fillText(fmtAxis(candles[i].t), i * cw + cw / 2 - 14, H - 8);
   }
 
   const level = (v, color, label, dash) => {
@@ -558,9 +637,8 @@ function drawChart(nowMs){
   c.font = '9px system-ui';
   for(const s of allSig){
     const ms = Date.parse(s.signal_at);
-    let idx = -1;
-    for(let i = 0; i < n; i++){ if(candles[i].t >= ms){ idx = i; break; } }
-    if(idx < 0 || s.entry == null) continue;
+    const idx = candleIdx(candles, ms, tfMs);
+    if(s.entry == null) continue;
     const x = idx * cw + cw / 2, ye = y(s.entry);
     const won = s.outcome && s.outcome.startsWith('TP');
     const col = won ? '#22c55e' : s.outcome === 'SL' ? '#ef4444' : '#9ca3af';
@@ -774,7 +852,7 @@ function applyZoom(factor){
   let dragging = false, dragX = 0, dragOff = 0;
   const pinchDist = () => { const [a, b] = [...touchPts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
   const candleW = () => Math.max(2, (cv.clientWidth - 60) / viewCount);
-  const maxOff = () => Math.max(0, M1.length - viewCount);
+  const maxOff = () => Math.max(0, tfBars().length - viewCount);
   // All drag paths funnel through these with absolute clientX, so a real
   // mouse firing both pointer AND mouse events stays idempotent.
   const panTo = (x) => {
@@ -891,6 +969,8 @@ async function boot(){
     const open = p.classList.toggle('open');
     t.classList.toggle('active', open);
   });
+  document.querySelectorAll('#tfbar .tf').forEach(b =>
+    b.addEventListener('click', () => setTF(b.dataset.tf)));
 }
 boot();
 </script>
