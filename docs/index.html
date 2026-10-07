@@ -220,7 +220,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=8"></script>
+<script src="engine.js?v=9"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -671,8 +671,12 @@ function drawChart(nowMs){
     c.restore();
   }
 
-  const off = Math.min(viewOffset, Math.max(0, bars.length - viewCount));
-  const candles = off > 0 ? bars.slice(-(viewCount + off), -off) : bars.slice(-viewCount);
+  const off = Math.min(viewOffset, Math.max(minOff(), bars.length - viewCount));
+  // off > 0: window into history. off < 0 (chart-shift): fewer bars than the
+  // view width, drawn left-aligned so blank space sits right of the live edge.
+  const candles = off > 0 ? bars.slice(-(viewCount + off), -off)
+    : off < 0 ? bars.slice(-(viewCount + off))
+    : bars.slice(-viewCount);
   const AXW = 68, AXH = 24;
   const pw = W - AXW, ph = H - AXH;
   let lo = Infinity, hi = -Infinity;
@@ -794,7 +798,9 @@ function drawChart(nowMs){
     pmap.below.forEach(p => band(p, '34,197,94'));    // buy-side liquidity = green
   }
 
-  const n = candles.length, cw = pw / n;
+  // candle width is anchored to the zoom level (viewCount), NOT the drawn count —
+  // so a chart-shift (fewer drawn bars) leaves blank space instead of stretching.
+  const n = candles.length, cw = pw / viewCount;
   // entry-candle indices for today's signals (blue outline) — mapped to the
   // candle containing the signal time on the current timeframe
   const entryIdx = new Set();
@@ -1176,6 +1182,10 @@ function defaultViewCount(){
 }
 let viewCount = 240;                       // visible candles, anchored to the live edge
 let viewOffset = 0;                      // candles panned back from the live edge (drag to scroll)
+// chart-shift (MT5-style, Mickey 7 Oct 2026): viewOffset may go NEGATIVE, so the
+// live edge can be dragged left, leaving blank space on the right instead of
+// being glued to the edge. Limit: 1/3 of the visible candles (10..240).
+const minOff = () => -Math.max(10, Math.min(240, Math.floor(viewCount / 3)));
 let userZoomed = false;                    // don't override a manual zoom on resize
 const VIEW_MIN = 40, VIEW_MAX = 600;
 function applyZoom(factor){
@@ -1195,7 +1205,9 @@ function applyZoom(factor){
   // All drag paths funnel through these with absolute clientX, so a real
   // mouse firing both pointer AND mouse events stays idempotent.
   const panTo = (x) => {
-    viewOffset = Math.min(maxOff(), Math.max(0, Math.round(dragOff + (x - dragX) / candleW())));
+    // lower bound is minOff() (chart-shift): dragging left past the live edge
+    // pushes the fresh candle left, opening blank space on the right
+    viewOffset = Math.min(maxOff(), Math.max(minOff(), Math.round(dragOff + (x - dragX) / candleW())));
     drawChart(Date.now());
   };
   const startDrag = (x) => { dragging = true; dragX = x; dragOff = viewOffset; cv.style.cursor = 'grabbing'; };
