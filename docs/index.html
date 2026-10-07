@@ -660,7 +660,7 @@ function drawChart(nowMs){
   const allSig = signalsToday.concat(swingSignalsToday);
   if (!levelMode) {
     pmap.above.concat(pmap.below).forEach(p => consider(p.price));
-    if(act && !levelMode){
+    if(act){
       [act.entry, act.sl, act.tp, act.tp2, act.tp3].forEach(v => { if(v != null) consider(v); });
     }
     allSig.forEach(s => { if(s.entry != null) consider(s.entry); });
@@ -791,7 +791,8 @@ function drawChart(nowMs){
     c.fillStyle = color; c.fillRect(pw, yy - 9, AXW, 18);
     c.fillStyle = '#0a0e14'; c.fillText(txt, pw + 4, yy + 3.5);
   };
-  if(act){
+  // EN/SL/TP lines: sniper tab only — level-map tabs stay clean.
+  if(act && !levelMode){
     level(act.tp, '#22c55e', act.kind === 'swing' ? 'TP1' : 'TP');
     if(act.kind === 'swing'){
       if(act.tp2 != null) level(act.tp2, '#4ade80', 'TP2', [7, 5]);
