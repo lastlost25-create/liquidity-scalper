@@ -401,6 +401,14 @@ function recompute(){
                           : Object.assign({}, s, { outcome: null, r: null });
     });
   }
+  // one open trade at a time (7 Oct 2026): while a signal is still running,
+  // later signals are suppressed — no overlapping positions, no stacks of
+  // signals firing at once (also kills same-minute scalp+swing duplicates)
+  {
+    const kept = new Set(LS.suppress_overlapping(signalsToday.concat(swingSignalsToday)));
+    signalsToday = signalsToday.filter(s => kept.has(s));
+    swingSignalsToday = swingSignalsToday.filter(s => kept.has(s));
+  }
   const allSigs = signalsToday.concat(swingSignalsToday);
   // detect newly resolved trades -> pulse the result banner (no flash on first load)
   const cur = {};
@@ -631,8 +639,8 @@ function drawChart(nowMs){
     const _f = c.font;
     c.font = (major ? '700 11px' : '500 10px') + ' system-ui';
     c.fillStyle = major ? '#f5c542' : '#8a93a8';
-    c.fillText((major ? 'MAJOR ' : '') + p.tf + (p.touches >= 2 ? ' ★×' + p.touches : ''),
-               6, mid - 4);
+    c.fillText((major ? 'MAJOR ' : '') + p.tf + (p.touches >= 2 ? ' ★×' + p.touches : '') +
+               ' · ' + p.price.toFixed(2), 6, mid - 4);
     c.font = _f;
   };
   const price = price0;
