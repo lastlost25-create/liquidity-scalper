@@ -106,6 +106,17 @@
   #err{position:absolute;top:56px;left:50%;transform:translateX(-50%);z-index:30;
     background:rgba(60,20,20,.95);border:1px solid var(--red);border-radius:10px;
     padding:10px 16px;font-size:12px;display:none;max-width:92%}
+  /* bar replay (Mickey, 7 Oct 2026): floating control bar over the chart */
+  #replayBar{position:absolute;left:50%;transform:translateX(-50%);bottom:34px;z-index:26;
+    background:rgba(10,14,20,.94);border:1px solid #f5c542;border-radius:12px;
+    padding:6px 8px;gap:6px;align-items:center;box-shadow:0 4px 18px rgba(0,0,0,.55)}
+  #replayBar button{background:#1a2230;border:1px solid #2a3448;color:#e6eaf2;border-radius:8px;
+    padding:7px 10px;font-size:14px;cursor:pointer;line-height:1}
+  #replayBar button:active{background:#2a3448}
+  #replayBar #rpPlay{min-width:40px;color:#f5c542;font-weight:700}
+  #replayBar #rpTime{font-size:12px;font-weight:700;color:#f5c542;min-width:104px;text-align:center}
+  #replayBar #rpExit{color:#ef4444}
+  #replayBtn.active{background:#f5c542;color:#0a0e14}
   @media (max-width:700px){
     /* MOBILE: topbar wraps into rows — status row first, controls flow after.
        (Without this, ~1100px of bar content clipped off a 390px phone and the
@@ -122,6 +133,11 @@
     #rulesTab{order:9}
     #sndBtn{order:10}
     #snapBtn{order:11}
+    #replayBtn{order:12}
+    /* MOBILE: replay bar must fit 390px */
+    #replayBar{max-width:96vw;overflow-x:auto;gap:4px;padding:5px 6px;bottom:30px}
+    #replayBar button{padding:6px 8px;font-size:13px}
+    #replayBar #rpTime{min-width:84px;font-size:11px}
     /* MOBILE: tap targets — old 22px buttons are unusable on touch */
     button.sym{padding:8px 10px;font-size:12px}
     button.tf{padding:8px 0;font-size:12px}
@@ -148,6 +164,7 @@
   <button class="sym" id="rulesTab" title="tap to show/hide discipline rules">RULES</button>
   <button class="sym" id="sndBtn" title="tap to mute/unmute the new-signal sound">🔊</button>
   <button class="sym" id="snapBtn" title="snapshot the chart as a PNG image to share">📸</button>
+  <button class="sym" id="replayBtn" title="bar replay — step through history and watch signals print on time">⏪</button>
   <span class="viewtabs" title="chart setups — SNIPER is the live signal setup">
     <button class="sym viewtab active" data-view="sniper" title="current sniper setup — live signals">SNIPER</button>
     <button class="sym viewtab" data-view="adv" title="major 4H + Daily reversal levels in advance">ADV REV</button>
@@ -170,6 +187,18 @@
 <div id="stage">
   <div id="chartWrap"><canvas id="chart"></canvas></div>
   <div id="err"></div>
+  <!-- bar replay controls (Mickey, 7 Oct 2026): step through history candle by
+       candle and watch each signal print exactly when it did live -->
+  <div id="replayBar" style="display:none">
+    <button id="rpBack10" title="back 10 candles">⏮</button>
+    <button id="rpBack1" title="back 1 candle">◀</button>
+    <button id="rpPlay" title="auto-play / pause">▶</button>
+    <button id="rpFwd1" title="forward 1 candle">+1</button>
+    <button id="rpFwd10" title="forward 10 candles">+10</button>
+    <button id="rpSpeed" title="playback speed">1×</button>
+    <span id="rpTime">--:--</span>
+    <button id="rpExit" title="exit replay — back to live">✕</button>
+  </div>
 
   <div class="panel WAIT collapsible" id="signalPanel">
     <h2>Signal <span class="chev">▾</span></h2>
@@ -220,7 +249,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=10"></script>
+<script src="engine.js?v=11"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -304,7 +333,7 @@ function tfViewCount(){
 function setTF(tf){
   if(!TFS.includes(tf) || tf === TF) return;
   TF = tf;
-  viewOffset = 0; priceShift = 0;   // re-anchor to the live edge on switch
+  viewOffset = 0; priceShift = 0; priceZoom = 1; zoomPrice = null;   // re-anchor to the live edge on switch
   viewCount = tfViewCount(); userZoomed = false;  // readable default zoom per timeframe
   document.querySelectorAll('#tfbar .tf').forEach(b =>
     b.classList.toggle('active', b.dataset.tf === tf));
@@ -422,9 +451,29 @@ function dailyOpen(nowMs){
 }
 
 /* ---------------- engine ---------------- */
+/* ---- bar replay (Mickey, 7 Oct 2026): step through history candle by candle
+   and watch each signal print exactly when it did live. While replaying,
+   recompute() runs on data truncated at the replay head — signals, pools and
+   outcomes can only use what was knowable at that candle. No future leak.
+   Live timers keep firing underneath; each recompute just re-renders the same
+   replay state, so nothing corrupts. ---- */
+let replay = null;   // {head, vc} | null — head = index into the FULL M1, vc = saved viewCount
+const RP_SPEEDS = [700, 350, 150];
+let rpTimer = null, rpSpeedIdx = 0;
 function recompute(){
-  const nowMs = Date.now();
-  if(M1.length < 10 || H1.length < 10 || H4.length < 10) return;
+  const rp = replay !== null;
+  const saved = rp ? { M1, H1, H4, M15, D1 } : null;
+  if(rp){
+    const t = saved.M1[replay.head].t + 60000;
+    const cut = a => a.filter(k => k.t < t);
+    M1 = cut(saved.M1); H1 = cut(saved.H1); H4 = cut(saved.H4);
+    M15 = cut(saved.M15); D1 = cut(saved.D1);
+  }
+  const nowMs = rp ? saved.M1[replay.head].t + 60000 : Date.now();
+  if(M1.length < 10 || H1.length < 10 || H4.length < 10){
+    if(saved) ({ M1, H1, H4, M15, D1 } = saved);
+    return;
+  }
   const m1c = LS.closed_only(M1, nowMs);
   const h1c = LS.closed_only(H1, nowMs);
   const h4c = LS.closed_only(H4, nowMs);
@@ -474,6 +523,7 @@ function recompute(){
   if(justResolved) flashSig = justResolved;
   prevOutcomes = cur;
   render(nowMs, m1c, h1c, h4c);
+  if(saved) ({ M1, H1, H4, M15, D1 } = saved);   // restore full stores after replay compute
 }
 
 function activeSignal(nowMs){
@@ -709,6 +759,13 @@ function drawChart(nowMs){
   const pad = ((hi - lo) * 0.10) || 1;
   lo -= pad; hi += pad;
   lo += priceShift; hi += priceShift;   // manual vertical pan (drag up/down)
+  if(priceZoom !== 1 && zoomPrice != null){
+    // manual vertical zoom (wheel over price axis): rescale around the anchor
+    // price/pixel-fraction so the price under the cursor stays put
+    const R1 = (hi - lo) / priceZoom;
+    lo = zoomPrice - zoomF * R1;
+    hi = lo + R1;
+  }
   lastLo = lo; lastHi = hi; lastPh = ph;
   const y = v => ph - (v - lo) / (hi - lo) * ph;
 
@@ -1191,6 +1248,10 @@ const minOff = () => -Math.max(10, Math.min(240, Math.floor(viewCount / 3)));
 // vertical pan (Mickey 7 Oct 2026): drag up/down moves the price scale.
 // priceShift is added to the auto range every draw; ±1 full range max.
 let priceShift = 0;
+// vertical zoom via wheel over the price axis (Mickey 7 Oct 2026, TradingView
+// style): priceZoom scales the range around an anchor (zoomPrice at pixel
+// fraction zoomF), so the price under the cursor stays put while zooming.
+let priceZoom = 1, zoomPrice = null, zoomF = 0.5;
 let lastLo = 0, lastHi = 1, lastPh = 1;   // last drawn range, for pixel→price math
 let userZoomed = false;                    // don't override a manual zoom on resize
 const VIEW_MIN = 40, VIEW_MAX = 600;
@@ -1221,6 +1282,8 @@ function applyZoom(factor){
   const endDrag = () => { dragging = false; dragMode = null; cv.style.cursor = 'grab'; };
   // vertical pan (Mickey 7 Oct 2026): drag up/down moves the price scale.
   // Drag down -> candles move down (higher prices come into view), like MT5.
+  // vertical pan (Mickey 7 Oct 2026): drag up/down moves the price scale.
+  // Drag down -> candles move down (higher prices come into view), like MT5.
   const pricePan = (y) => {
     const range = lastHi - lastLo;
     if(!(range > 0) || !(lastPh > 0)) return;
@@ -1228,11 +1291,24 @@ function applyZoom(factor){
     priceShift = Math.max(-range, Math.min(range, priceOff0 + (y - dragY) * ppp));
     drawChart(Date.now());
   };
+  // vertical zoom (Mickey 7 Oct 2026): mouse wheel over the price axis scales
+  // candle height around the cursor price (TradingView style). Wheel anywhere
+  // else keeps zooming time.
+  const applyPriceZoom = (e, r) => {
+    const range = lastHi - lastLo;
+    if(!(range > 0) || !(lastPh > 0)) return;
+    const yPx = Math.max(0, Math.min(lastPh, e.clientY - r.top));
+    const f = (lastPh - yPx) / lastPh;
+    zoomPrice = lastLo + f * range;
+    zoomF = f;
+    priceZoom = Math.max(0.25, Math.min(8, priceZoom * (e.deltaY < 0 ? 1.18 : 1 / 1.18)));
+    drawChart(Date.now());
+  };
   cv.addEventListener('pointerdown', e => {
     const now = Date.now();
     downX = e.clientX; downY = e.clientY; downT = now;
     if(e.pointerType !== 'mouse') XH.on = false;   // touch press starts pan/zoom — clear the inspector (mouse keeps hover)
-    if(now - lastTap < 300 && !dragging){ viewCount = tfViewCount(); viewOffset = 0; priceShift = 0; userZoomed = false; justReset = now; drawChart(now); }  // double-tap resets
+    if(now - lastTap < 300 && !dragging){ viewCount = tfViewCount(); viewOffset = 0; priceShift = 0; priceZoom = 1; zoomPrice = null; userZoomed = false; justReset = now; drawChart(now); }  // double-tap resets
     lastTap = now;
     touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { cv.setPointerCapture(e.pointerId); } catch(_){}
@@ -1277,9 +1353,81 @@ function applyZoom(factor){
   window.addEventListener('mouseup', endDrag);
   cv.addEventListener('wheel', e => {
     e.preventDefault();
-    applyZoom(e.deltaY < 0 ? 1.18 : 1 / 1.18);
+    // wheel over the price axis (right 68px) -> vertical zoom (candle size);
+    // wheel over the candles -> time zoom, as before
+    const r = cv.getBoundingClientRect();
+    if(e.clientX - r.left >= r.width - 68) applyPriceZoom(e, r);
+    else applyZoom(e.deltaY < 0 ? 1.18 : 1 / 1.18);
   }, { passive: false });
 })();
+
+/* ---------------- bar replay controls ---------------- */
+function rpClock(){
+  if(!replay) return;
+  const b = M1[replay.head];
+  $('rpTime').textContent = b ? fmtFullT(b.t) : '--:--';
+}
+function replayStep(d){
+  if(!replay) return;
+  rpPause();
+  replay.head = Math.max(10, Math.min(M1.length - 1, replay.head + d));
+  recompute();
+  rpClock();
+}
+function rpPause(){
+  if(rpTimer){ clearInterval(rpTimer); rpTimer = null; }
+  const b = $('rpPlay'); if(b) b.textContent = '▶';
+}
+function rpPlay(){
+  if(!replay) return;
+  if(rpTimer){ rpPause(); return; }
+  rpTimer = setInterval(() => {
+    if(!replay || replay.head >= M1.length - 1){ rpPause(); return; }
+    replay.head++;
+    recompute();
+    rpClock();
+  }, RP_SPEEDS[rpSpeedIdx]);
+  $('rpPlay').textContent = '⏸';
+}
+function rpCycleSpeed(){
+  rpSpeedIdx = (rpSpeedIdx + 1) % RP_SPEEDS.length;
+  $('rpSpeed').textContent = ['1×', '2×', '4×'][rpSpeedIdx];
+  if(rpTimer){ rpPause(); rpPlay(); }
+}
+function enterReplay(){
+  if(replay || M1.length < 60) return;
+  rpPause();
+  // start 30 candles before the latest signal — step forward and watch it print
+  const allS = signalsToday.concat(swingSignalsToday);
+  let head;
+  if(allS.length){
+    const lastSig = Math.max.apply(null, allS.map(s => Date.parse(s.signal_at)));
+    head = Math.max(10, candleIdx(M1, lastSig, 60000) - 30);
+  } else {
+    head = M1.length - 101;
+  }
+  replay = { head, vc: viewCount };
+  viewOffset = 0; priceShift = 0; priceZoom = 1; zoomPrice = null;
+  prevOutcomes = null;   // avoid a false resolve-flash carried from live state
+  $('replayBtn').classList.add('active');
+  $('replayBar').style.display = 'flex';
+  const f = $('fresh');
+  if(f){ f.textContent = '⏪ REPLAY'; f.className = 'badge on'; }
+  recompute();
+  rpClock();
+}
+function exitReplay(){
+  if(!replay) return;
+  rpPause();
+  viewCount = replay.vc;
+  replay = null;
+  prevOutcomes = null;
+  viewOffset = 0; priceShift = 0; priceZoom = 1; zoomPrice = null;
+  $('replayBtn').classList.remove('active');
+  $('replayBar').style.display = 'none';
+  recompute();
+  setFresh('live');
+}
 
 async function boot(){
   /* Primary: Yahoo XAUUSD spot (closest free match to Exness/OANDA).
@@ -1374,6 +1522,14 @@ async function boot(){
     if (soundOn) beep(880, .12, 0);   // confirmation blip (also unlocks audio)
   });
   $('snapBtn').addEventListener('click', snapshotChart);
+  $('replayBtn').addEventListener('click', () => replay ? exitReplay() : enterReplay());
+  $('rpBack10').addEventListener('click', () => replayStep(-10));
+  $('rpBack1').addEventListener('click', () => replayStep(-1));
+  $('rpPlay').addEventListener('click', rpPlay);
+  $('rpFwd1').addEventListener('click', () => replayStep(1));
+  $('rpFwd10').addEventListener('click', () => replayStep(10));
+  $('rpSpeed').addEventListener('click', rpCycleSpeed);
+  $('rpExit').addEventListener('click', exitReplay);
   document.querySelectorAll('#tfbar .tf').forEach(b =>
     b.addEventListener('click', () => setTF(b.dataset.tf)));
 }
