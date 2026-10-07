@@ -457,6 +457,33 @@ def track_outcome(signal, m1_after, max_hold_hours=24):
     return {"outcome": "EXPIRED", "r": round(r, 2), "closed_at": exit_ts.isoformat()}
 
 
+def suppress_overlapping(signals):
+    """One-open-trade rule (Mickey, 7 Oct 2026) — exact port of docs/engine.js.
+
+    Signals must carry outcome + closed_at. Walk chronologically; drop a
+    signal when any kept earlier signal is still open at its signal time.
+    Same-timestamp ties prefer kind='swing'.
+    """
+    by_time = sorted(signals,
+                     key=lambda s: (pd.Timestamp(s["signal_at"]),
+                                    0 if s.get("kind") == "swing" else 1))
+    kept = []
+    for s in by_time:
+        t = pd.Timestamp(s["signal_at"])
+        blocked = False
+        for k in kept:
+            if not k.get("outcome"):
+                blocked = True
+                break
+            closed = pd.Timestamp(k["closed_at"]) if k.get("closed_at") else None
+            if closed is not None and closed > t:
+                blocked = True
+                break
+        if not blocked:
+            kept.append(s)
+    return kept
+
+
 # ----------------------------------------------------------------------------
 # SWING SETUP ("liq bias") — 15m major swings, M1 sweep, confirmation candles
 #
