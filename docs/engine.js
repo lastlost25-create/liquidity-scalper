@@ -642,6 +642,13 @@ function dqrs_levels(price, d1bars, nowMs, tol = 1.00) {
     zones.push({ id: group.map(g => g.id).join('+'), tf: 'D1', src: srcs, side: p.side,
                  price: zp, touches, grade, premium: touches >= 2 });
   }
+  // PDH / PDL / daily-OPEN are key daily reference levels (StockLearners:
+  // "mark the previous day's low"; the open is the algo trigger line) — they
+  // are always major so they draw strong bands and get ▲/▼ edge pins when
+  // out of the visible range.
+  for (const z of zones) {
+    if (/(^|\+)(PDH|PDL|OPEN)($|\+)/.test(z.src)) z.grade = 'major';
+  }
   const above = zones.filter(z => z.price >= price).sort((a, b) => a.price - b.price);
   const below = zones.filter(z => z.price < price).sort((a, b) => b.price - a.price);
   return { above, below };
