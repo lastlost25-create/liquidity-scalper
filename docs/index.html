@@ -123,6 +123,7 @@
   <button class="sym" id="symLabel" title="tap to switch feed">···</button>
   <button class="sym" id="poolTab" title="tap to show/hide liquidity pools">POOLS</button>
   <button class="sym" id="rulesTab" title="tap to show/hide discipline rules">RULES</button>
+  <button class="sym" id="sndBtn" title="tap to mute/unmute the new-signal sound">🔊</button>
   <span class="badge" id="fresh">···</span>
   <div id="price">–</div>
   <span class="badge" id="trend">H1 ···</span>
@@ -281,6 +282,12 @@ function setTF(tf){
 const $ = id => document.getElementById(id);
 const fmtT = ms => new Date(ms).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:PKT});
 const fmtD = ms => new Date(ms).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:PKT});
+const fmtHeld = ms => {   // "47m", "1h 23m", "2d 4h" — how long a trade took
+  const m = Math.max(0, Math.round(ms / 60000));
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  return h < 48 ? h + 'h ' + (m % 60) + 'm' : Math.floor(h / 24) + 'd ' + (h % 24) + 'h';
+};
 const marketOpen = ms => { const d = new Date(ms).getUTCDay(); return d !== 0 && d !== 6; };
 
 function err(msg){
@@ -491,7 +498,9 @@ function renderPanels(nowMs, h1c, h4c){
     const tpTxt = done.kind === 'swing'
       ? `TP1 ${done.tp.toFixed(2)}${done.tp2 ? ' · TP2 ' + done.tp2.toFixed(2) : ''}${done.tp3 ? ' · TP3 ' + done.tp3.toFixed(2) : ''}`
       : `TP ${done.tp.toFixed(2)}`;
-    $('reason').innerHTML = `entry ${done.entry.toFixed(2)} · SL ${done.sl.toFixed(2)} · ${tpTxt} → <b style="color:${rc}">${done.r > 0 ? '+' : ''}${done.r}R</b>`;
+    const heldTxt = done.closed_at
+      ? ` · ⏱ ${fmtHeld(Date.parse(done.closed_at) - Date.parse(done.signal_at))}` : '';
+    $('reason').innerHTML = `entry ${done.entry.toFixed(2)} · SL ${done.sl.toFixed(2)} · ${tpTxt} → <b style="color:${rc}">${done.r > 0 ? '+' : ''}${done.r}R</b>${heldTxt}`;
   } else if(live){
     setPanelClass(sp, live.direction);
     const kindTag = live.kind === 'swing' ? 'SWING ' : '';
@@ -508,7 +517,7 @@ function renderPanels(nowMs, h1c, h4c){
       if(live.tp2) $('pTP2').textContent = live.tp2.toFixed(2) + ' (1:' + live.rr2.toFixed(1) + ')';
       if(live.tp3) $('pTP3').textContent = live.tp3.toFixed(2) + ' (1:' + live.rr3.toFixed(1) + ')';
     }
-    $('vsub').textContent = kindTag + live.direction + ' · swept ' + fmtT(Date.parse(live.swept_at)) + ' PKT · ' + live.session;
+    $('vsub').textContent = kindTag + live.direction + ' · signal ' + fmtT(Date.parse(live.signal_at)) + ' PKT · ' + live.session;
     $('reason').textContent = '💧 ' + live.reason;
   } else {
     plan.style.display = 'none';
@@ -535,13 +544,19 @@ function renderPanels(nowMs, h1c, h4c){
     }
   }
 
-  // a fresh signal or result auto-opens a collapsed signal panel
+  // a fresh signal pops the panel open AND sounds an alert — the "major
+  // thing" is catching the moment it appears. Freshness-guarded so a page
+  // load doesn't beep for old signals. Results open the panel silently.
   {
     const shown = done || live;
     const vkey = shown ? sigKey(shown) + '|' + (shown.outcome || 'open') : 'wait';
     if (vkey !== lastVKey) {
       lastVKey = vkey;
-      if (shown) setCollapsed(sp, false);
+      if (shown) {
+        setCollapsed(sp, false);
+        if (live && !live.outcome &&
+            nowMs - Date.parse(live.signal_at) < 3 * 60 * 1000) signalAlert();
+      }
     }
   }
 
@@ -565,11 +580,13 @@ function renderPanels(nowMs, h1c, h4c){
     const oc = x.outcome
       ? `<span class="${won ? 'win' : 'loss'}">${x.outcome} ${x.r > 0 ? '+' : ''}${x.r}R</span>`
       : '<span style="color:var(--dim)">open</span>';
+    const held = (x.outcome && x.closed_at)
+      ? `<div style="font-size:9px;color:var(--dim)">⏱ ${fmtHeld(Date.parse(x.closed_at) - Date.parse(x.signal_at))}</div>` : '';
     const ktag = x.kind === 'swing' ? '<span class="ktag">SWING</span> ' : '';
     const tps = x.kind === 'swing'
       ? `<div style="font-size:10px;color:var(--dim)">T2 ${x.tp2 ? x.tp2.toFixed(1) : '–'} · T3 ${x.tp3 ? x.tp3.toFixed(1) : '–'}</div>` : '';
     return `<tr><td>${fmtT(Date.parse(x.signal_at))}</td><td class="${x.direction}">${ktag}${x.direction}</td>`
-      + `<td>${x.entry.toFixed(2)}${tps}</td><td>1:${x.rr.toFixed(1)}</td><td>${oc}</td></tr>`;
+      + `<td>${x.entry.toFixed(2)}${tps}</td><td>1:${x.rr.toFixed(1)}</td><td>${oc}${held}</td></tr>`;
   }).join('') : '<tr><td colspan="5" class="empty">no signals yet today — strict filter, this is normal</td></tr>';
 
   $('updated').textContent = 'engine ' + fmtD(nowMs) + ' PKT';
@@ -752,6 +769,27 @@ function paintClock(nowMs){
   sb.className = 'badge' + (cd.live ? ' on' : '');
   sb.title = cd.live ? 'Killzone ends in ' + fmtDur(cd.ms) : 'Next killzone opens in ' + fmtDur(cd.ms);
 }
+
+/* ---- new-signal sound alert (WebAudio, no files needed) ----
+   Browsers only allow sound after the user has tapped the page once;
+   the toggle below also serves as that first tap. */
+let soundOn = true, audioCtx = null;
+function beep(freq, dur, when){
+  if (!soundOn) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const t = audioCtx.currentTime + when;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.type = 'sine'; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.4, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.start(t); o.stop(t + dur + 0.05);
+  } catch(e){}
+}
+const signalAlert = () => { beep(880, .16, 0); beep(1174.7, .2, .2); };
 
 /* ---------------- live wiring ---------------- */
 function setFresh(state){
@@ -1068,6 +1106,11 @@ async function boot(){
     const p = $('rulesPanel'), t = $('rulesTab');
     const open = p.classList.toggle('open');
     t.classList.toggle('active', open);
+  });
+  $('sndBtn').addEventListener('click', () => {
+    soundOn = !soundOn;
+    $('sndBtn').textContent = soundOn ? '🔊' : '🔇';
+    if (soundOn) beep(880, .12, 0);   // confirmation blip (also unlocks audio)
   });
   document.querySelectorAll('#tfbar .tf').forEach(b =>
     b.addEventListener('click', () => setTF(b.dataset.tf)));
