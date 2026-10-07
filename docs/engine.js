@@ -38,6 +38,7 @@ const CONFIG = {
   max_swing_signals_per_day: 4,       // separate daily cap for swing setups
   swing_sl_buffer: 1.00,             // v1 swing stops (superseded by v2)
   swing_v2_sl: 2.50,                 // v2 sniper SL: fixed $2.50 from entry (his real $2.16, 6 Oct 2026)
+  swing_v2_min_risk: 0.30,           // 7 Oct 2026: drop signals with stop < $0.30 (below spread = untradeable; backtest 189/+4.547R vs 193/+5.464R with 4 phantom tickets)
   swing_v2_pool_once: false,         // v2: re-sweeps of the same pool may fire (backtest 6 Oct: +3.94R vs +3.16R)
   swing_v2_rank: 'rr',               // v2 final daily pick: 'rr' (top-RR) or 'time' (chronological; backtest: 'rr' wins)
   htf_match_tol: 1.00,               // 15m swing must sit within $1 of an H1/H4 fractal level (HTF confluence)
@@ -455,6 +456,7 @@ function build_swing_signals_v2(m1bars, pools, nowMs, dayMs = null, pdl = null, 
       const tp1 = uniq[0], tp2 = uniq.length > 1 ? uniq[1] : null, tp3 = uniq.length > 2 ? uniq[2] : null;
       const risk = Math.abs(entry - sl);
       if (risk <= 0) continue;
+      if (risk < CONFIG.swing_v2_min_risk) { stats.tiny_risk = (stats.tiny_risk || 0) + 1; continue; }
       const rr1 = Math.abs(tp1 - entry) / risk;
       if (rr1 < CONFIG.min_rr) { stats.low_rr = (stats.low_rr || 0) + 1; continue; }
       // sanity: entry must sit strictly between SL and TP1 (never already through the stop)
