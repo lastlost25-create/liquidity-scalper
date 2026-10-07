@@ -199,7 +199,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=5"></script>
+<script src="engine.js?v=6"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -525,7 +525,9 @@ function renderPanels(nowMs, h1c, h4c){
       : `TP ${done.tp.toFixed(2)}`;
     const heldTxt = done.closed_at
       ? ` · ⏱ ${fmtHeld(Date.parse(done.closed_at) - Date.parse(done.signal_at))}` : '';
-    $('reason').innerHTML = `entry ${done.entry.toFixed(2)} · SL ${done.sl.toFixed(2)} · ${tpTxt} → <b style="color:${rc}">${done.r > 0 ? '+' : ''}${done.r}R</b>${heldTxt}`;
+    const peakTxt = (done.peak_r != null && done.peak_r > 0)
+      ? ` · peak <b style="color:var(--green)">+${done.peak_r}R</b>` : '';
+    $('reason').innerHTML = `entry ${done.entry.toFixed(2)} · SL ${done.sl.toFixed(2)} · ${tpTxt} → <b style="color:${rc}">${done.r > 0 ? '+' : ''}${done.r}R</b>${heldTxt}${peakTxt}`;
   } else if(live){
     setPanelClass(sp, live.direction);
     const kindTag = live.kind === 'swing' ? 'SWING ' : '';
@@ -606,7 +608,7 @@ function renderPanels(nowMs, h1c, h4c){
       ? `<span class="${won ? 'win' : 'loss'}">${x.outcome} ${x.r > 0 ? '+' : ''}${x.r}R</span>`
       : '<span style="color:var(--dim)">open</span>';
     const held = (x.outcome && x.closed_at)
-      ? `<div style="font-size:9px;color:var(--dim)">⏱ ${fmtHeld(Date.parse(x.closed_at) - Date.parse(x.signal_at))}</div>` : '';
+      ? `<div style="font-size:9px;color:var(--dim)">⏱ ${fmtHeld(Date.parse(x.closed_at) - Date.parse(x.signal_at))}${x.peak_r != null && x.peak_r > 0 ? ` · peak <span style="color:var(--green)">+${x.peak_r}R</span>` : ''}</div>` : '';
     const ktag = x.kind === 'swing' ? '<span class="ktag">SWING</span> ' : '';
     const tps = x.kind === 'swing'
       ? `<div style="font-size:10px;color:var(--dim)">T2 ${x.tp2 ? x.tp2.toFixed(1) : '–'} · T3 ${x.tp3 ? x.tp3.toFixed(1) : '–'}</div>` : '';
