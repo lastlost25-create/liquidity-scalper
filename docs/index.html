@@ -86,6 +86,9 @@
   .tag.prem{color:var(--gold);border-color:var(--gold)}
   .tag.major{color:#f5c542;border-color:#f5c542;font-weight:700}
   .tag.minor{color:#8a93a8}
+  .panel.collapsible h2{cursor:pointer;user-select:none;-webkit-user-select:none}
+  .panel h2 .chev{color:var(--dim);font-size:10px;margin-left:6px}
+  .panel.collapsed .cbody{display:none}
   .dist{color:var(--dim);font-family:ui-monospace,Menlo,monospace;font-size:10px}
   #logPanel{left:10px;bottom:10px;max-width:340px;max-height:38%;overflow-y:auto}
   #logPanel table{width:100%;border-collapse:collapse;font-size:11px}
@@ -138,8 +141,9 @@
   <div id="chartWrap"><canvas id="chart"></canvas></div>
   <div id="err"></div>
 
-  <div class="panel WAIT" id="signalPanel">
-    <h2>Signal</h2>
+  <div class="panel WAIT collapsible" id="signalPanel">
+    <h2>Signal <span class="chev">▾</span></h2>
+    <div class="cbody">
     <div id="vtext">WAIT</div>
     <div id="vsub">connecting…</div>
     <div class="plan" id="plan" style="display:none">
@@ -152,6 +156,7 @@
     </div>
     <div id="reason"></div>
     <div id="ctx"></div>
+    </div>
   </div>
 
   <div class="panel" id="poolPanel">
@@ -171,12 +176,14 @@
     <div class="rule"><span class="n">5</span><span>Don't chase <b>daily</b> profit — that ruins you one day. Think in <b>months</b>: losing days are fine, the month is what counts.</span></div>
   </div>
 
-  <div class="panel" id="logPanel">
-    <h2>Today's signals</h2>
+  <div class="panel collapsible collapsed" id="logPanel">
+    <h2>Today's signals <span id="logCount"></span> <span class="chev">▸</span></h2>
+    <div class="cbody">
     <table>
       <thead><tr><th>TIME</th><th>DIR</th><th>ENTRY</th><th>R:R</th><th>RESULT</th></tr></thead>
       <tbody id="log"><tr><td colspan="5" class="empty">…</td></tr></tbody>
     </table>
+    </div>
   </div>
 </div>
 
@@ -422,6 +429,21 @@ let prevOutcomes = null;   // signal_at -> outcome; null until first compute
 let flashSig = null;       // signal_at of a just-resolved trade (pulse banner)
 
 /* ---------------- panels ---------------- */
+function setCollapsed(panel, collapsed){
+  panel.classList.toggle('collapsed', collapsed);
+  const c = panel.querySelector('h2 .chev');
+  if (c) c.textContent = collapsed ? '▸' : '▾';
+}
+// set verdict class without wiping collapsible/collapsed state
+function setPanelClass(el, cls){
+  const keep = ['collapsible', 'collapsed'].filter(c => el.classList.contains(c));
+  el.className = ('panel ' + cls + ' ' + keep.join(' ')).trim();
+}
+let lastVKey = 'wait';
+document.querySelectorAll('.panel.collapsible > h2').forEach(h => {
+  h.addEventListener('click', () =>
+    setCollapsed(h.parentElement, !h.parentElement.classList.contains('collapsed')));
+});
 function poolRow(p){
   const g = p.grade === 'major' ? '<span class="tag major">MAJOR</span>'
           : '<span class="tag minor">MINOR</span>';
@@ -450,7 +472,7 @@ function renderPanels(nowMs, h1c, h4c){
     const lost = done.outcome === 'SL';
     const cls = tpWin ? 'TP' : lost ? 'SL' : 'WAIT';
     const flash = flashSig === sigKey(done) ? (tpWin ? ' flashTP' : lost ? ' flashSL' : '') : '';
-    sp.className = 'panel ' + cls + flash;
+    setPanelClass(sp, cls + flash);
     const lbl = done.outcome === 'TP' ? '🎯 TP HIT'
       : tpWin ? `🎯 ${done.outcome} HIT` : lost ? '🛑 SL HIT' : '⌛ EXPIRED';
     $('vtext').textContent = lbl;
@@ -463,7 +485,7 @@ function renderPanels(nowMs, h1c, h4c){
       : `TP ${done.tp.toFixed(2)}`;
     $('reason').innerHTML = `entry ${done.entry.toFixed(2)} · SL ${done.sl.toFixed(2)} · ${tpTxt} → <b style="color:${rc}">${done.r > 0 ? '+' : ''}${done.r}R</b>`;
   } else if(live){
-    sp.className = 'panel ' + live.direction;
+    setPanelClass(sp, live.direction);
     const kindTag = live.kind === 'swing' ? 'SWING ' : '';
     $('vtext').textContent = kindTag + live.direction;
     plan.style.display = 'grid';
@@ -482,7 +504,7 @@ function renderPanels(nowMs, h1c, h4c){
     $('reason').textContent = '💧 ' + live.reason;
   } else {
     plan.style.display = 'none';
-    sp.className = 'panel WAIT';
+    setPanelClass(sp, 'WAIT');
     $('vtext').textContent = 'WAIT';
     const sess = open ? LS.session_of(nowMs) : null;
     const nSig = signalsToday.length + swingSignalsToday.length;
@@ -505,6 +527,16 @@ function renderPanels(nowMs, h1c, h4c){
     }
   }
 
+  // a fresh signal or result auto-opens a collapsed signal panel
+  {
+    const shown = done || live;
+    const vkey = shown ? sigKey(shown) + '|' + (shown.outcome || 'open') : 'wait';
+    if (vkey !== lastVKey) {
+      lastVKey = vkey;
+      if (shown) setCollapsed(sp, false);
+    }
+  }
+
   const trend = LS.structure_trend(h1c, LS.CONFIG.h1_left, LS.CONFIG.h1_right);
   const h4r = LS.structure_trend(h4c, LS.CONFIG.h4_left, LS.CONFIG.h4_right);
   $('ctx').textContent = 'H1 ' + trend + ' · H4 ' + h4r + ' (context)';
@@ -519,6 +551,7 @@ function renderPanels(nowMs, h1c, h4c){
 
   const logRows = signalsToday.concat(swingSignalsToday)
     .sort((a, b) => Date.parse(b.signal_at) - Date.parse(a.signal_at));
+  $('logCount').textContent = logRows.length ? '(' + logRows.length + ')' : '';
   $('log').innerHTML = logRows.length ? logRows.map(x => {
     const won = x.outcome && x.outcome.startsWith('TP');
     const oc = x.outcome
