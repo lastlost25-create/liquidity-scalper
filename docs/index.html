@@ -1282,8 +1282,6 @@ function applyZoom(factor){
   const endDrag = () => { dragging = false; dragMode = null; cv.style.cursor = 'grab'; };
   // vertical pan (Mickey 7 Oct 2026): drag up/down moves the price scale.
   // Drag down -> candles move down (higher prices come into view), like MT5.
-  // vertical pan (Mickey 7 Oct 2026): drag up/down moves the price scale.
-  // Drag down -> candles move down (higher prices come into view), like MT5.
   const pricePan = (y) => {
     const range = lastHi - lastLo;
     if(!(range > 0) || !(lastPh > 0)) return;
@@ -1310,13 +1308,17 @@ function applyZoom(factor){
     if(e.pointerType !== 'mouse') XH.on = false;   // touch press starts pan/zoom — clear the inspector (mouse keeps hover)
     if(now - lastTap < 300 && !dragging){ viewCount = tfViewCount(); viewOffset = 0; priceShift = 0; priceZoom = 1; zoomPrice = null; userZoomed = false; justReset = now; drawChart(now); }  // double-tap resets
     lastTap = now;
-    touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // mouse stays out of the touch set: touchPts is ONLY for the two-finger
+    // pinch. Letting the mouse in here lets a stale hover entry combine with
+    // a real touch (or a second device id) into a phantom "pinch" that kills
+    // the mouse drag on real hardware.
+    if(e.pointerType !== 'mouse') touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { cv.setPointerCapture(e.pointerId); } catch(_){}
     if(touchPts.size === 2){ dragging = false; pinchD = pinchDist(); cv.style.cursor = 'grab'; }
     else startDrag(e.clientX, e.clientY);
   });
   cv.addEventListener('pointermove', e => {
-    touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if(e.pointerType !== 'mouse') touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if(touchPts.size === 2){
       const d = pinchDist();
       if(pinchD > 0 && d > 0) applyZoom(d / pinchD);
