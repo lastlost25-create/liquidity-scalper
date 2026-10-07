@@ -107,14 +107,35 @@
     background:rgba(60,20,20,.95);border:1px solid var(--red);border-radius:10px;
     padding:10px 16px;font-size:12px;display:none;max-width:92%}
   @media (max-width:700px){
-    #signalPanel{max-width:238px;padding:8px 10px}
+    /* MOBILE: topbar wraps into rows — status row first, controls flow after.
+       (Without this, ~1100px of bar content clipped off a 390px phone and the
+       SNIPER/ADV REV/DQRS tabs were unreachable.) */
+    #topbar{flex-wrap:wrap;gap:6px 8px;padding:8px 10px}
+    #topbar h1{font-size:13px;order:1}
+    #fresh{order:2}
+    #price{font-size:18px;order:3;margin-left:auto}
+    #session{order:4}
+    #trend{order:5}
+    .viewtabs{order:6}
+    #symLabel{order:7}
+    #poolTab{order:8}
+    #rulesTab{order:9}
+    #sndBtn{order:10}
+    #snapBtn{order:11}
+    /* MOBILE: tap targets — old 22px buttons are unusable on touch */
+    button.sym{padding:8px 10px;font-size:12px}
+    button.tf{padding:8px 0;font-size:12px}
+    .panel.collapsible h2{padding:8px 0}
+    /* MOBILE: narrower floating panels so open pairs don't overlap each other
+       signal(210)+pools(150)+margins=380<390; log(200)+rules(150)+margins=370<390 */
+    #signalPanel{max-width:210px;padding:8px 10px}
     #vtext{font-size:24px}
     .plan b{font-size:13px}
-    #poolPanel{width:172px}
-    #rulesPanel{width:200px}
-    #logPanel{max-width:250px}
-    #topbar h1{font-size:13px}
-    #price{font-size:18px}
+    #poolPanel{width:150px}
+    #poolPanel .dist{display:none}
+    #rulesPanel{width:150px}
+    #logPanel{max-width:200px}
+    #logPanel td{padding:5px 3px}
   }
 </style>
 </head>
