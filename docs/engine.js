@@ -505,17 +505,42 @@ function track_swing_outcome(signal, barsAfter, maxHoldHours = 48) {
   return { outcome: 'EXPIRED', r: round2(r), closed_at: iso(last.t) };
 }
 
+/* ----------------------------------------------------------------------------
+ * ONE-OPEN-TRADE RULE (Mickey, 7 Oct 2026) — while a signal is still running,
+ * later signals are suppressed: no overlapping positions, no stacks of
+ * signals at the same time. Signals must already carry outcome + closed_at
+ * from track_*_outcome. Walk chronologically; a signal is dropped when any
+ * kept earlier signal is still open at its signal time (open now, or closed
+ * after it). Same-timestamp ties prefer the swing (v2) plan — richer targets.
+ * -------------------------------------------------------------------------- */
+function suppress_overlapping(signals) {
+  const byTime = [...signals].sort((a, b) =>
+    Date.parse(a.signal_at) - Date.parse(b.signal_at) ||
+    ((a.kind === 'swing' ? 0 : 1) - (b.kind === 'swing' ? 0 : 1)));
+  const kept = [];
+  for (const s of byTime) {
+    const t = Date.parse(s.signal_at);
+    const blocked = kept.some(k => {
+      if (!k.outcome) return true;                    // still running
+      const closed = k.closed_at ? Date.parse(k.closed_at) : Infinity;
+      return closed > t;                              // closed after this signal starts
+    });
+    if (!blocked) kept.push(s);
+  }
+  return kept;
+}
+
 // Node + browser export
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CONFIG, fractals, detect_pools, structure_trend, session_of, next_session, session_countdown,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
-    track_outcome, track_swing_outcome, liquidity_map, iso, utcDay, DAY_MS,
+    track_outcome, track_swing_outcome, suppress_overlapping, liquidity_map, iso, utcDay, DAY_MS,
   };
 } else if (typeof window !== 'undefined') {
   window.LS = {
     CONFIG, fractals, detect_pools, structure_trend, session_of, next_session, session_countdown,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
-    track_outcome, track_swing_outcome, liquidity_map, iso, utcDay, DAY_MS,
+    track_outcome, track_swing_outcome, suppress_overlapping, liquidity_map, iso, utcDay, DAY_MS,
   };
 }
