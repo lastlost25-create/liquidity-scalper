@@ -220,7 +220,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=9"></script>
+<script src="engine.js?v=10"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -304,7 +304,7 @@ function tfViewCount(){
 function setTF(tf){
   if(!TFS.includes(tf) || tf === TF) return;
   TF = tf;
-  viewOffset = 0;   // re-anchor to the live edge on switch
+  viewOffset = 0; priceShift = 0;   // re-anchor to the live edge on switch
   viewCount = tfViewCount(); userZoomed = false;  // readable default zoom per timeframe
   document.querySelectorAll('#tfbar .tf').forEach(b =>
     b.classList.toggle('active', b.dataset.tf === tf));
@@ -708,6 +708,8 @@ function drawChart(nowMs){
   if(!isFinite(lo)){ lo = 4100; hi = 4200; }
   const pad = ((hi - lo) * 0.10) || 1;
   lo -= pad; hi += pad;
+  lo += priceShift; hi += priceShift;   // manual vertical pan (drag up/down)
+  lastLo = lo; lastHi = hi; lastPh = ph;
   const y = v => ph - (v - lo) / (hi - lo) * ph;
 
   c.lineWidth = 1; c.font = '600 12px system-ui';
@@ -1186,6 +1188,10 @@ let viewOffset = 0;                      // candles panned back from the live ed
 // live edge can be dragged left, leaving blank space on the right instead of
 // being glued to the edge. Limit: 1/3 of the visible candles (10..240).
 const minOff = () => -Math.max(10, Math.min(240, Math.floor(viewCount / 3)));
+// vertical pan (Mickey 7 Oct 2026): drag up/down moves the price scale.
+// priceShift is added to the auto range every draw; ±1 full range max.
+let priceShift = 0;
+let lastLo = 0, lastHi = 1, lastPh = 1;   // last drawn range, for pixel→price math
 let userZoomed = false;                    // don't override a manual zoom on resize
 const VIEW_MIN = 40, VIEW_MAX = 600;
 function applyZoom(factor){
@@ -1198,7 +1204,8 @@ function applyZoom(factor){
   cv.style.cursor = 'grab';
   const touchPts = new Map();   // touch pointers, for pinch only
   let pinchD = 0, lastTap = 0, justReset = 0;
-  let dragging = false, dragX = 0, dragOff = 0, downX = 0, downY = 0, downT = 0;
+  let dragging = false, dragX = 0, dragY = 0, dragOff = 0, priceOff0 = 0, dragMode = null,
+      downX = 0, downY = 0, downT = 0;
   const pinchDist = () => { const [a, b] = [...touchPts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
   const candleW = () => Math.max(2, (cv.clientWidth - 68) / viewCount);
   const maxOff = () => Math.max(0, tfBars().length - viewCount);
@@ -1210,18 +1217,27 @@ function applyZoom(factor){
     viewOffset = Math.min(maxOff(), Math.max(minOff(), Math.round(dragOff + (x - dragX) / candleW())));
     drawChart(Date.now());
   };
-  const startDrag = (x) => { dragging = true; dragX = x; dragOff = viewOffset; cv.style.cursor = 'grabbing'; };
-  const endDrag = () => { dragging = false; cv.style.cursor = 'grab'; };
+  const startDrag = (x, y) => { dragging = true; dragX = x; dragY = y; dragOff = viewOffset; priceOff0 = priceShift; dragMode = null; cv.style.cursor = 'grabbing'; };
+  const endDrag = () => { dragging = false; dragMode = null; cv.style.cursor = 'grab'; };
+  // vertical pan (Mickey 7 Oct 2026): drag up/down moves the price scale.
+  // Drag down -> candles move down (higher prices come into view), like MT5.
+  const pricePan = (y) => {
+    const range = lastHi - lastLo;
+    if(!(range > 0) || !(lastPh > 0)) return;
+    const ppp = range / lastPh;   // price per pixel
+    priceShift = Math.max(-range, Math.min(range, priceOff0 + (y - dragY) * ppp));
+    drawChart(Date.now());
+  };
   cv.addEventListener('pointerdown', e => {
     const now = Date.now();
     downX = e.clientX; downY = e.clientY; downT = now;
     if(e.pointerType !== 'mouse') XH.on = false;   // touch press starts pan/zoom — clear the inspector (mouse keeps hover)
-    if(now - lastTap < 300 && !dragging){ viewCount = tfViewCount(); viewOffset = 0; userZoomed = false; justReset = now; drawChart(now); }  // double-tap resets
+    if(now - lastTap < 300 && !dragging){ viewCount = tfViewCount(); viewOffset = 0; priceShift = 0; userZoomed = false; justReset = now; drawChart(now); }  // double-tap resets
     lastTap = now;
     touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { cv.setPointerCapture(e.pointerId); } catch(_){}
     if(touchPts.size === 2){ dragging = false; pinchD = pinchDist(); cv.style.cursor = 'grab'; }
-    else startDrag(e.clientX);
+    else startDrag(e.clientX, e.clientY);
   });
   cv.addEventListener('pointermove', e => {
     touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1229,7 +1245,13 @@ function applyZoom(factor){
       const d = pinchDist();
       if(pinchD > 0 && d > 0) applyZoom(d / pinchD);
       pinchD = d;
-    } else if(dragging){ if(e.pointerType === 'mouse') XH.on = false; panTo(e.clientX); }
+    } else if(dragging){
+      // direction lock: mostly-horizontal -> time pan, mostly-vertical -> price pan
+      const dxm = e.clientX - dragX, dym = e.clientY - dragY;
+      if(!dragMode && Math.hypot(dxm, dym) > 10) dragMode = Math.abs(dxm) >= Math.abs(dym) ? 'h' : 'v';
+      XH.on = false;
+      if(dragMode === 'v') pricePan(e.clientY); else panTo(e.clientX);
+    }
     else if(e.pointerType === 'mouse'){ setXH(e.clientX, e.clientY); }  // hover inspector (desktop)
   });
   const pend = e => {
@@ -1247,8 +1269,11 @@ function applyZoom(factor){
   cv.addEventListener('pointerleave', e => { if(e.pointerType === 'mouse') hideXH(); });
   // mouse fallback: if pointer events misbehave in an environment, plain
   // mouse events still drive the same idempotent pan
-  cv.addEventListener('mousedown', e => startDrag(e.clientX));
-  window.addEventListener('mousemove', e => { if(dragging) panTo(e.clientX); });
+  cv.addEventListener('mousedown', e => startDrag(e.clientX, e.clientY));
+  window.addEventListener('mousemove', e => {
+    if(!dragging) return;
+    if(dragMode === 'v') pricePan(e.clientY); else panTo(e.clientX);
+  });
   window.addEventListener('mouseup', endDrag);
   cv.addEventListener('wheel', e => {
     e.preventDefault();
