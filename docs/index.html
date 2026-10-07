@@ -712,36 +712,43 @@ function drawChart(nowMs){
     c.font = _f;
   };
   const price = price0;
-  // Level-map views (ADV REV gold, DQRS violet): major zones in advance, with
-  // the nearest major beyond the visible range pinned to the chart edge —
-  // levels visible before price arrives, no chart rescaling.
+  // Level-map views (ADV REV gold; DQRS violet, with PDH green / PDL red for
+  // instant high-side vs low-side recognition — Mickey, 7 Oct 2026): major
+  // zones in advance, with the nearest major beyond the visible range pinned
+  // to the chart edge — levels visible before price arrives, no rescaling.
+  const hexA = (hex, a) => {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  };
   const drawLevels = (view, lo, hi, cfg) => {
     const zones = view.above.concat(view.below);
+    const zc = cfg.zoneAccent || (() => cfg.accent);
     for (const z of zones) {
       if (z.price < lo || z.price > hi) continue;
+      const ac = zc(z), major = z.grade === 'major';
       const y1 = y(z.price + .30), y2 = y(z.price - .30), mid = (y1 + y2) / 2;
-      const major = z.grade === 'major';
-      c.fillStyle = major ? cfg.fillMaj : cfg.fillMin;
+      c.fillStyle = major ? hexA(ac, .14) : hexA(ac, .06);
       c.fillRect(0, y1, pw, y2 - y1);
-      c.strokeStyle = major ? cfg.accent : cfg.dim;
+      c.strokeStyle = major ? ac : hexA(ac, .45);
       c.lineWidth = major ? 1.6 : 1;
       if (!major) c.setLineDash([4, 4]);
       c.beginPath(); c.moveTo(0, mid); c.lineTo(pw, mid); c.stroke();
       c.setLineDash([]); c.lineWidth = 1;
       const _f = c.font;
       c.font = (major ? '700 11px' : '500 10px') + ' system-ui';
-      c.fillStyle = major ? cfg.accent : cfg.dimTxt;
+      c.fillStyle = major ? ac : hexA(ac, .78);
       c.fillText(cfg.label(z, major), 6, mid - 4);
       c.font = _f;
     }
     const pin = (z, top) => {
       if (!z) return;
+      const ac = zc(z);
       const yy = top ? 1.5 : ph - 1.5;
-      c.strokeStyle = cfg.accent; c.setLineDash([6, 4]); c.lineWidth = 1.2;
+      c.strokeStyle = ac; c.setLineDash([6, 4]); c.lineWidth = 1.2;
       c.beginPath(); c.moveTo(0, yy); c.lineTo(pw, yy); c.stroke();
       c.setLineDash([]); c.lineWidth = 1;
       const _f = c.font;
-      c.font = '700 11px system-ui'; c.fillStyle = cfg.accent;
+      c.font = '700 11px system-ui'; c.fillStyle = ac;
       c.fillText((top ? '▲ ' : '▼ ') + z.price.toFixed(2), pw + 6, top ? 12 : ph - 6);
       c.font = _f;
     };
@@ -750,13 +757,13 @@ function drawChart(nowMs){
     pin(majors.filter(z => z.price < lo).sort((a, b) => b.price - a.price)[0], false);
   };
   if (advMode && adv) drawLevels(adv, lo, hi, {
-    accent: '#f5c542', dim: 'rgba(245,197,66,.45)', dimTxt: '#a08c4f',
-    fillMaj: 'rgba(245,197,66,.14)', fillMin: 'rgba(245,197,66,.06)',
+    accent: '#f5c542',
     label: (z, major) => (major ? 'ADV MAJOR ' : 'ADV ') + z.tf + ' · ' + z.price.toFixed(2),
   });
   else if (dqrsMode && dqrs) drawLevels(dqrs, lo, hi, {
-    accent: '#b49aff', dim: 'rgba(180,154,255,.45)', dimTxt: '#8f7fc9',
-    fillMaj: 'rgba(180,154,255,.13)', fillMin: 'rgba(180,154,255,.06)',
+    accent: '#b49aff',
+    zoneAccent: z => /(^|\+)PDH($|\+)/.test(z.src) ? '#22c55e'
+                  : /(^|\+)PDL($|\+)/.test(z.src) ? '#ef4444' : '#b49aff',
     label: (z, major) => (major ? 'DQRS ★ ' : 'DQRS ') + z.src + ' · ' + z.price.toFixed(2),
   });
   else {
