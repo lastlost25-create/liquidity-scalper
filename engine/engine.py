@@ -457,6 +457,62 @@ def track_outcome(signal, m1_after, max_hold_hours=24):
     return {"outcome": "EXPIRED", "r": round(r, 2), "closed_at": exit_ts.isoformat()}
 
 
+def detect_daily_levels(d1, now, max_age_days=20):
+    """Daily fractal swing levels (2,2), merged within $1.00.
+    Exact port of docs/engine.js detect_daily_levels. Display-only."""
+    max_age = now - timedelta(days=max_age_days)
+    highs, lows = fractals(d1, 2, 2)
+    pools, pid = [], 0
+    for side, swings in (("high", highs), ("low", lows)):
+        for ts, price in swings:
+            if ts < max_age:
+                continue
+            merged = next((p for p in pools
+                           if p["side"] == side and abs(p["price"] - price) <= 1.00), None)
+            if merged:
+                merged["touches"] += 1
+                merged["price"] = (merged["price"] * (merged["touches"] - 1) + price) / merged["touches"]
+                merged["formed_at"] = max(merged["formed_at"], ts)
+            else:
+                pid += 1
+                pools.append({"id": f"D1-{side}-{pid}", "tf": "D1", "side": side,
+                              "price": round(float(price), 2), "touches": 1,
+                              "premium": False, "formed_at": ts})
+    return pools
+
+
+def adv_major_levels(price, h4pools, d1pools, tol=1.00):
+    """Merge H4 + D1 pools into major zones for the advance-reversal view.
+    Exact port of docs/engine.js adv_major_levels. Display-only."""
+    zones, used = [], set()
+    ordered = sorted(list(h4pools) + list(d1pools), key=lambda q: q["price"])
+    for p in ordered:
+        if p["id"] in used:
+            continue
+        group = [p]
+        for q in ordered:
+            if (q["id"] != p["id"] and q["id"] not in used and q["side"] == p["side"]
+                    and abs(q["price"] - p["price"]) <= tol):
+                group.append(q)
+                used.add(q["id"])
+        used.add(p["id"])
+        tfs = "+".join(sorted({g["tf"] for g in group}))
+        zp = round(sum(g["price"] for g in group) / len(group), 2)
+        touches = max(g["touches"] for g in group)
+        cross = len({g["tf"] for g in group}) > 1
+        grade = "major" if (cross or touches >= 3) else \
+                "minor" if (touches >= 2 or tfs in ("D1", "H4")) else "tiny"
+        if grade == "tiny":
+            continue
+        zones.append({"id": "+".join(g["id"] for g in group), "tf": tfs,
+                      "side": p["side"], "price": zp, "touches": touches,
+                      "grade": grade, "premium": touches >= 2})
+    above = sorted([z for z in zones if z["price"] >= price], key=lambda z: z["price"])
+    below = sorted([z for z in zones if z["price"] < price], key=lambda z: z["price"],
+                   reverse=True)
+    return {"above": above, "below": below}
+
+
 def suppress_overlapping(signals):
     """One-open-trade rule (Mickey, 7 Oct 2026) — exact port of docs/engine.js.
 
