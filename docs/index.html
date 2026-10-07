@@ -211,27 +211,23 @@ const TFS = ['M1','M15','H1','H4','D1'];
 const TF_MS = { M1:60000, M15:900000, H1:3600000, H4:14400000, D1:86400000 };
 let TF = 'M1';
 let M15 = [];
-function aggregate(bars, tfMs){
-  const out = [];
-  for(const b of bars){
-    const key = Math.floor(b.t / tfMs) * tfMs;
-    const last = out[out.length - 1];
-    if(!last || last.t !== key) out.push({ t:key, o:b.o, h:b.h, l:b.l, c:b.c });
-    else { if(b.h > last.h) last.h = b.h; if(b.l < last.l) last.l = b.l; last.c = b.c; }
-  }
-  return out;
-}
 function tfBars(){
   return TF === 'M1' ? M1 : TF === 'M15' ? M15 : TF === 'H1' ? H1 : TF === 'H4' ? H4 : D1;
 }
-function refreshM15(){ M15 = aggregate(M1, TF_MS.M15); }
+/* M15 is a native store (deep history, like H1/H4/D1) — the engine never
+   uses it, it's display only. patchForming rolls it forward + patches the
+   forming bar from the latest M1 tick so it moves live between fetches. */
 function patchForming(){
   // keep the forming higher-TF bar moving with the latest tick between the
   // 5-minute higher-TF refreshes (engine uses closed bars only — unaffected)
   const nowMs = Date.now();
   const px = M1.length ? M1[M1.length-1].c : null;
   if(px == null) return;
-  const pairs = [[H1, TF_MS.H1], [H4, TF_MS.H4], [D1, TF_MS.D1]];
+  // roll the native M15 store forward so new 15m bars appear between fetches
+  const m15ms = TF_MS.M15, key15 = Math.floor(nowMs / m15ms) * m15ms;
+  const l15 = M15[M15.length - 1];
+  if(l15 && key15 > l15.t) M15.push({ t: key15, o: px, h: px, l: px, c: px });
+  const pairs = [[M15, m15ms], [H1, TF_MS.H1], [H4, TF_MS.H4], [D1, TF_MS.D1]];
   for(const [store, ms] of pairs){
     const b = store[store.length - 1];
     if(b && nowMs >= b.t && nowMs < b.t + ms){
@@ -254,11 +250,18 @@ const fmtAxis = ms => TF === 'D1'
   : TF === 'H4'
   ? new Date(ms).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:false, timeZone:PKT })
   : fmtT(ms);
+/* Default visible candles for the active timeframe: readable width, and always
+   leaves at least 8 bars of history beyond the screen so drag-to-pan works. */
+function tfViewCount(){
+  const n = tfBars().length;
+  if(n <= 28) return n;
+  return Math.min(defaultViewCount(), n - 8);
+}
 function setTF(tf){
   if(!TFS.includes(tf) || tf === TF) return;
   TF = tf;
   viewOffset = 0;   // re-anchor to the live edge on switch
-  viewCount = defaultViewCount(); userZoomed = false;  // readable default zoom per timeframe
+  viewCount = tfViewCount(); userZoomed = false;  // readable default zoom per timeframe
   document.querySelectorAll('#tfbar .tf').forEach(b =>
     b.classList.toggle('active', b.dataset.tf === tf));
   applyFeedLabel();
@@ -328,7 +331,8 @@ async function attemptYahooNow(){
     if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
     try { ws.close(); } catch(e){}
     M1 = m1; H1 = h1; H4 = resample4h(h1);
-    try { D1 = await yahooKlines('1d', '3mo'); } catch(e){}
+    try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
+    try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
     FEED = 'yahoo'; wsFails = 0; yahooFails = 0;
     applyFeedLabel();
     recompute();
@@ -522,7 +526,6 @@ function renderPanels(nowMs, h1c, h4c){
 
 /* ---------------- chart ---------------- */
 function render(nowMs, m1c, h1c, h4c){
-  refreshM15();
   patchForming();
   renderPanels(nowMs, h1c, h4c);
   drawChart(nowMs);
@@ -740,7 +743,8 @@ async function switchToPaxg(){
       paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
     if(!m1.length) throw new Error('empty paxg');
     M1 = m1; H1 = h1; H4 = h4;
-    try { D1 = await paxgKlines('1d', 90); } catch(e){}
+    try { M15 = await paxgKlines('15m', 1500); } catch(e){}
+    try { D1 = await paxgKlines('1d', 1000); } catch(e){}
     FEED = 'paxg'; yahooFails = 0; wsFails = 0;
     applyFeedLabel();
     recompute();
@@ -831,11 +835,13 @@ async function refreshHigherTFs(){
     if(FEED === 'yahoo'){
       const h1 = await yahooKlines('1h', '1mo');
       H1 = h1; H4 = resample4h(h1);
-      try { D1 = await yahooKlines('1d', '3mo'); } catch(e){}
+      try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
+      try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
     } else {
       const [h1, h4] = await Promise.all([paxgKlines('1h', 500), paxgKlines('4h', 500)]);
       H1 = h1; H4 = h4;
-      try { D1 = await paxgKlines('1d', 90); } catch(e){}
+      try { M15 = await paxgKlines('15m', 1500); } catch(e){}
+      try { D1 = await paxgKlines('1d', 1000); } catch(e){}
     }
     recompute();
   } catch(e){}
@@ -865,7 +871,7 @@ function applyZoom(factor){
   let pinchD = 0, lastTap = 0;
   let dragging = false, dragX = 0, dragOff = 0;
   const pinchDist = () => { const [a, b] = [...touchPts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
-  const candleW = () => Math.max(2, (cv.clientWidth - 60) / viewCount);
+  const candleW = () => Math.max(2, (cv.clientWidth - 68) / viewCount);
   const maxOff = () => Math.max(0, tfBars().length - viewCount);
   // All drag paths funnel through these with absolute clientX, so a real
   // mouse firing both pointer AND mouse events stays idempotent.
@@ -877,7 +883,7 @@ function applyZoom(factor){
   const endDrag = () => { dragging = false; cv.style.cursor = 'grab'; };
   cv.addEventListener('pointerdown', e => {
     const now = Date.now();
-    if(now - lastTap < 300 && !dragging){ viewCount = defaultViewCount(); viewOffset = 0; userZoomed = false; drawChart(now); }  // double-tap resets
+    if(now - lastTap < 300 && !dragging){ viewCount = tfViewCount(); viewOffset = 0; userZoomed = false; drawChart(now); }  // double-tap resets
     lastTap = now;
     touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { cv.setPointerCapture(e.pointerId); } catch(_){}
@@ -914,14 +920,16 @@ async function boot(){
       yahooKlines('1m', '1d'), yahooKlines('1h', '1mo')]);
     if(m1.length < 30 || h1.length < 30) throw new Error('thin Yahoo data');
     M1 = m1; H1 = h1; H4 = resample4h(h1);
-    try { D1 = await yahooKlines('1d', '3mo'); } catch(e){}
+    try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
+    try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
     FEED = 'yahoo';
   } catch(e1){
     try {
       const [m1, h1, h4] = await Promise.all([
         paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
       M1 = m1; H1 = h1; H4 = h4;
-      try { D1 = await paxgKlines('1d', 90); } catch(e){}
+      try { M15 = await paxgKlines('15m', 1500); } catch(e){}
+      try { D1 = await paxgKlines('1d', 1000); } catch(e){}
       FEED = 'paxg';
     } catch(e2){
       err('Could not reach any price feed. Check your connection and reload.');
@@ -930,7 +938,7 @@ async function boot(){
     }
   }
   applyFeedLabel();
-  viewCount = defaultViewCount();   // readable candle width for this screen
+  viewCount = tfViewCount();   // readable candle width for this screen
   recompute();
   if(FEED === 'yahoo'){
     setFresh('live');
@@ -968,7 +976,7 @@ async function boot(){
     if(FEED === 'paxg') paxgResync(); else yahooResync();
   });
   window.addEventListener('resize', () => {
-    if(!userZoomed) viewCount = defaultViewCount();
+    if(!userZoomed) viewCount = tfViewCount();
     const [nowMs, m1c, h1c, h4c] = closedView();
     render(nowMs, m1c, h1c, h4c);
   });
