@@ -144,6 +144,27 @@ function session_of(tsMs) {
   return null;
 }
 
+// Countdown for the header session clock: { label, ms, live }.
+// In a killzone -> time left in it; else time until the next one
+// (weekend / Friday-after-close -> Monday 00:00 UTC).
+function session_countdown(tsMs) {
+  const short = n => n === 'London' ? 'LDN' : n === 'NewYork' ? 'NY' : n;
+  const d = new Date(tsMs);
+  const day = d.getUTCDay();
+  const dayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  if (day === 0 || day === 6 || (day === 5 && (d.getUTCHours() + d.getUTCMinutes() / 60) >= 15)) {
+    const addDays = day === 6 ? 2 : day === 0 ? 1 : 3;
+    return { sess: 'MON', verb: 'OPENS IN', ms: dayMs + addDays * 86400e3 - tsMs, live: false };
+  }
+  const hour = d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600;
+  for (const [name, start, end] of CONFIG.sessions) {
+    if (hour >= start && hour < end)
+      return { sess: short(name), verb: 'ENDS IN', ms: dayMs + end * 3600e3 - tsMs, live: true };
+  }
+  const nx = next_session(tsMs);
+  return { sess: short(nx.name), verb: 'OPENS IN', ms: nx.atMs - tsMs, live: false };
+}
+
 // Next killzone after tsMs: { name, atMs }. Used for the WAIT panel detail.
 function next_session(tsMs) {
   const d = new Date(tsMs);
@@ -441,13 +462,13 @@ function track_swing_outcome(signal, barsAfter, maxHoldHours = 48) {
 // Node + browser export
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, fractals, detect_pools, structure_trend, session_of, next_session,
+    CONFIG, fractals, detect_pools, structure_trend, session_of, next_session, session_countdown,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
     track_outcome, track_swing_outcome, liquidity_map, iso, utcDay, DAY_MS,
   };
 } else if (typeof window !== 'undefined') {
   window.LS = {
-    CONFIG, fractals, detect_pools, structure_trend, session_of, next_session,
+    CONFIG, fractals, detect_pools, structure_trend, session_of, next_session, session_countdown,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
     track_outcome, track_swing_outcome, liquidity_map, iso, utcDay, DAY_MS,
   };
