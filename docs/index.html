@@ -258,6 +258,7 @@ function setTF(tf){
   if(!TFS.includes(tf) || tf === TF) return;
   TF = tf;
   viewOffset = 0;   // re-anchor to the live edge on switch
+  viewCount = defaultViewCount(); userZoomed = false;  // readable default zoom per timeframe
   document.querySelectorAll('#tfbar .tf').forEach(b =>
     b.classList.toggle('active', b.dataset.tf === tf));
   applyFeedLabel();
@@ -656,7 +657,20 @@ function drawChart(nowMs){
       c.fillStyle = col; c.fillText(txt, x - tw / 2, ty + 1);
     }
   }
-  level(price, '#d4a93c', '', [3, 4]);
+  // live price line (MT5-style): bright dashed line + tag, always drawn on top
+  {
+    const yy = Math.round(y(price)) + .5;
+    c.strokeStyle = 'rgba(212,169,60,.30)'; c.lineWidth = 5;
+    c.beginPath(); c.moveTo(0, yy); c.lineTo(pw, yy); c.stroke();
+    c.strokeStyle = '#f5c542'; c.lineWidth = 1.5; c.setLineDash([6, 4]);
+    c.beginPath(); c.moveTo(0, yy); c.lineTo(pw, yy); c.stroke();
+    c.setLineDash([]); c.lineWidth = 1;
+    const txt = price.toFixed(2);
+    c.font = '700 12px system-ui';
+    const tw = c.measureText(txt).width;
+    c.fillStyle = '#f5c542'; c.fillRect(pw, yy - 10, AXW, 20);
+    c.fillStyle = '#0a0e14'; c.fillText(txt, pw + (AXW - tw) / 2, yy + 4);
+  }
 }
 
 /* ---------------- live wiring ---------------- */
