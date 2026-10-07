@@ -369,7 +369,15 @@ function recompute(){
   const h1c = LS.closed_only(H1, nowMs);
   const h4c = LS.closed_only(H4, nowMs);
   pools = LS.detect_pools(h1c, h4c, nowMs);
-  const { signals } = LS.build_signals(m1c, pools, h1c, nowMs);
+  // Detection runs on closed bars + the forming candle: the sweep candle is
+  // closed and the entry bar's open is fixed, so a sweep prints the moment its
+  // candle closes (seconds) instead of 1-2 candles late. No repaint possible.
+  // Outcome tracking below stays on closed bars only.
+  const lastC = m1c[m1c.length - 1];
+  const forming = (M1.length && lastC && M1[M1.length - 1].t > lastC.t)
+    ? M1[M1.length - 1] : null;
+  const m1sig = forming ? m1c.concat([forming]) : m1c;
+  const { signals } = LS.build_signals(m1sig, pools, h1c, nowMs);
   signalsToday = signals.map(s => {
     const after = m1c.filter(b => b.t > Date.parse(s.signal_at));
     return after.length ? Object.assign({}, s, LS.track_outcome(s, after))
@@ -379,7 +387,7 @@ function recompute(){
   // calibrated 6 Oct 2026). Pools ARE the levels (his "4h + 1h swing low").
   {
     const { pdl, pdh } = prevDayHL(nowMs);
-    const swr = LS.build_swing_signals_v2(m1c, pools, nowMs, null, pdl, pdh, 'extreme');
+    const swr = LS.build_swing_signals_v2(m1sig, pools, nowMs, null, pdl, pdh, 'extreme');
     swingSignalsToday = swr.signals.map(s => {
       const after = m1c.filter(b => b.t > Date.parse(s.signal_at));
       return after.length ? Object.assign({}, s, LS.track_swing_outcome(s, after))
