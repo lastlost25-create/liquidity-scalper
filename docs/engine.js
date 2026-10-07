@@ -381,7 +381,7 @@ function liquidity_map(price, pools, n = 5) {
  * TP1/TP2/TP3: nearest three opposing levels from pools + PDL/PDH.
  * RR gate on TP1 >= min_rr. Killzones, 4/day cap, one trade per sweep.
  * -------------------------------------------------------------------------- */
-function build_swing_signals_v2(m1bars, pools, nowMs, dayMs = null, pdl = null, pdh = null, slMode = 'extreme') {
+function build_swing_signals_v2(m1bars, pools, nowMs, dayMs = null, pdl = null, pdh = null, slMode = 'extreme', dopen = null) {
   const day = utcDay(dayMs === null ? nowMs : dayMs);
   const scan = m1bars.filter(b => utcDay(b.t) === day);
   if (scan.length < 10) return { signals: [], stats: {} };
@@ -426,6 +426,11 @@ function build_swing_signals_v2(m1bars, pools, nowMs, dayMs = null, pdl = null, 
       }
       if (red && pdl != null && pdl < entry) cands.push(pdl);
       if (!red && pdh != null && pdh > entry) cands.push(pdh);
+      // Daily-open target (7 Oct 2026, StockLearners video 3 — backtested
+      // +4.357R → +5.462R/trade as a TP level; as an entry trigger it loses
+      // money, so it joins the TP candidates only, never the sweep pools).
+      if (red && dopen != null && dopen < entry) cands.push(dopen);
+      if (!red && dopen != null && dopen > entry) cands.push(dopen);
       const uniq = [...new Set(cands.map(c => round2(c)))].sort((a, b) => red ? b - a : a - b).slice(0, 3);
       if (!uniq.length) { stats.no_tp = (stats.no_tp || 0) + 1; continue; }
       const tp1 = uniq[0], tp2 = uniq.length > 1 ? uniq[1] : null, tp3 = uniq.length > 2 ? uniq[2] : null;
