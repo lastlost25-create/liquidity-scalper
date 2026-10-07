@@ -594,19 +594,67 @@ function adv_major_levels(price, h4pools, d1pools, tol = 1.00) {
   return { above, below };
 }
 
+/* ----------------------------------------------------------------------------
+ * DQRS LEVELS (Mickey, 7 Oct 2026) — the daily reversal map, shown in advance
+ * on its own tab. Built from the StockLearners videos: daily fractal levels
+ * (2,2), the daily OPEN ("algo trigger line" — price snaps where the daily
+ * candle flips red/green), and previous-day high/low. Merged within $1.00.
+ * Display-only: no signal logic changes.
+ * -------------------------------------------------------------------------- */
+function dqrs_levels(price, d1bars, nowMs, tol = 1.00) {
+  const d1pools = detect_daily_levels(closed_only(d1bars, nowMs), nowMs);
+  const items = d1pools.map(p => ({ ...p, src: 'D1' }));
+  const dayStart = utcDay(nowMs);
+  const live = [...d1bars].reverse().find(b => b.t >= dayStart && b.o != null);
+  const prev = [...d1bars].reverse().find(b => b.t < dayStart && b.h != null && b.l != null);
+  const sideOf = v => (v >= price ? 'high' : 'low');
+  if (live) items.push({ id: 'DQRS-OPEN', tf: 'D1', src: 'OPEN', side: sideOf(live.o),
+    price: round2(live.o), touches: 1, grade: 'minor', premium: false, formed_at: live.t });
+  if (prev) {
+    items.push({ id: 'DQRS-PDH', tf: 'D1', src: 'PDH', side: sideOf(prev.h),
+      price: round2(prev.h), touches: 1, grade: 'minor', premium: false, formed_at: prev.t });
+    items.push({ id: 'DQRS-PDL', tf: 'D1', src: 'PDL', side: sideOf(prev.l),
+      price: round2(prev.l), touches: 1, grade: 'minor', premium: false, formed_at: prev.t });
+  }
+  const zones = [];
+  const used = new Set();
+  const sorted = items.sort((a, b) => a.price - b.price);
+  for (const p of sorted) {
+    if (used.has(p.id)) continue;
+    const group = [p];
+    for (const q of sorted) {
+      if (q.id !== p.id && !used.has(q.id) && q.side === p.side &&
+          Math.abs(q.price - p.price) <= tol) {
+        group.push(q); used.add(q.id);
+      }
+    }
+    used.add(p.id);
+    const srcs = [...new Set(group.map(g => g.src))].sort().join('+');
+    const zp = round2(group.reduce((s, g) => s + g.price, 0) / group.length);
+    const touches = Math.max(...group.map(g => g.touches));
+    const confluent = new Set(group.map(g => g.src)).size > 1;
+    const grade = (confluent || touches >= 3) ? 'major' : 'minor';
+    zones.push({ id: group.map(g => g.id).join('+'), tf: 'D1', src: srcs, side: p.side,
+                 price: zp, touches, grade, premium: touches >= 2 });
+  }
+  const above = zones.filter(z => z.price >= price).sort((a, b) => a.price - b.price);
+  const below = zones.filter(z => z.price < price).sort((a, b) => b.price - a.price);
+  return { above, below };
+}
+
 // Node + browser export
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CONFIG, fractals, detect_pools, structure_trend, session_of, next_session, session_countdown,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
     track_outcome, track_swing_outcome, suppress_overlapping, liquidity_map,
-    detect_daily_levels, adv_major_levels, iso, utcDay, DAY_MS,
+    detect_daily_levels, adv_major_levels, dqrs_levels, iso, utcDay, DAY_MS,
   };
 } else if (typeof window !== 'undefined') {
   window.LS = {
     CONFIG, fractals, detect_pools, structure_trend, session_of, next_session, session_countdown,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
     track_outcome, track_swing_outcome, suppress_overlapping, liquidity_map,
-    detect_daily_levels, adv_major_levels, iso, utcDay, DAY_MS,
+    detect_daily_levels, adv_major_levels, dqrs_levels, iso, utcDay, DAY_MS,
   };
 }
