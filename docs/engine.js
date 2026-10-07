@@ -289,6 +289,23 @@ function build_signals(m1bars, pools, h1bars, nowMs, dayMs = null, usedPoolIds =
  * OUTCOME TRACKING — forward-walk closed M1 after entry: TP or SL first?
  * Both print in one candle -> SL first (conservative, like engine.py).
  * -------------------------------------------------------------------------- */
+/* Peak favorable excursion (Mickey, 7 Oct 2026): the most profit the trade
+   showed before it closed, in R multiples — "how close was it?" for losers.
+   Measured over bars up to and including the closing bar. */
+function peak_profit_r(signal, barsAfter, closedAtMs) {
+  const risk = Math.abs(signal.entry - signal.sl);
+  if (!(risk > 0) || closedAtMs == null) return null;
+  let peak = 0;
+  for (const c of barsAfter) {
+    if (c.t > closedAtMs) break;
+    const fav = signal.direction === 'LONG'
+      ? (c.h - signal.entry) / risk
+      : (signal.entry - c.l) / risk;
+    if (fav > peak) peak = fav;
+  }
+  return round2(peak);
+}
+
 function track_outcome(signal, barsAfter, maxHoldHours = 24) {
   const deadline = new Date(signal.signal_at).getTime() + maxHoldHours * 3600000;
   for (const c of barsAfter) {
@@ -298,7 +315,8 @@ function track_outcome(signal, barsAfter, maxHoldHours = 24) {
     else { slHit = c.h >= signal.sl; tpHit = c.l <= signal.tp; }
     if (slHit || tpHit) {
       const won = tpHit && !slHit;
-      return { outcome: won ? 'TP' : 'SL', r: won ? signal.rr : -1.0, closed_at: iso(c.t) };
+      return { outcome: won ? 'TP' : 'SL', r: won ? signal.rr : -1.0, closed_at: iso(c.t),
+               peak_r: peak_profit_r(signal, barsAfter, c.t) };
     }
   }
   // Expired only if the deadline actually passed inside the data.
@@ -312,7 +330,8 @@ function track_outcome(signal, barsAfter, maxHoldHours = 24) {
   const r = signal.direction === 'LONG'
     ? (last.c - signal.entry) / Math.abs(signal.entry - signal.sl)
     : (signal.entry - last.c) / Math.abs(signal.entry - signal.sl);
-  return { outcome: 'EXPIRED', r: round2(r), closed_at: iso(last.t) };
+  return { outcome: 'EXPIRED', r: round2(r), closed_at: iso(last.t),
+           peak_r: peak_profit_r(signal, barsAfter, last.t) };
 }
 
 /* ----------------------------------------------------------------------------
@@ -494,8 +513,10 @@ function track_swing_outcome(signal, barsAfter, maxHoldHours = 48) {
       }
     }
   }
-  if (best > 0) return { outcome: 'TP' + best, r: rrs[best - 1], closed_at: iso(closedAt) };
-  if (stopped) return { outcome: 'SL', r: -1.0, closed_at: iso(closedAt) };
+  if (best > 0) return { outcome: 'TP' + best, r: rrs[best - 1], closed_at: iso(closedAt),
+                        peak_r: peak_profit_r(signal, barsAfter, closedAt) };
+  if (stopped) return { outcome: 'SL', r: -1.0, closed_at: iso(closedAt),
+                        peak_r: peak_profit_r(signal, barsAfter, closedAt) };
   // Expired only if the deadline actually passed inside the data.
   // A trade that hasn't hit TP/SL with time still left is OPEN (null),
   // not expired — the old code mislabeled every open trade as EXPIRED.
@@ -507,7 +528,8 @@ function track_swing_outcome(signal, barsAfter, maxHoldHours = 48) {
   const r = signal.direction === 'LONG'
     ? (last.c - signal.entry) / Math.abs(signal.entry - signal.sl)
     : (signal.entry - last.c) / Math.abs(signal.entry - signal.sl);
-  return { outcome: 'EXPIRED', r: round2(r), closed_at: iso(last.t) };
+  return { outcome: 'EXPIRED', r: round2(r), closed_at: iso(last.t),
+           peak_r: peak_profit_r(signal, barsAfter, last.t) };
 }
 
 /* ----------------------------------------------------------------------------
@@ -659,14 +681,14 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CONFIG, fractals, detect_pools, structure_trend, session_of, next_session, session_countdown,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
-    track_outcome, track_swing_outcome, suppress_overlapping, liquidity_map,
+    track_outcome, track_swing_outcome, peak_profit_r, suppress_overlapping, liquidity_map,
     detect_daily_levels, adv_major_levels, dqrs_levels, iso, utcDay, DAY_MS,
   };
 } else if (typeof window !== 'undefined') {
   window.LS = {
     CONFIG, fractals, detect_pools, structure_trend, session_of, next_session, session_countdown,
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
-    track_outcome, track_swing_outcome, suppress_overlapping, liquidity_map,
+    track_outcome, track_swing_outcome, peak_profit_r, suppress_overlapping, liquidity_map,
     detect_daily_levels, adv_major_levels, dqrs_levels, iso, utcDay, DAY_MS,
   };
 }
