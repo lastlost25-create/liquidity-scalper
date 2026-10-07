@@ -311,13 +311,47 @@ function track_outcome(signal, barsAfter, maxHoldHours = 24) {
   return { outcome: 'EXPIRED', r: round2(r), closed_at: iso(last.t) };
 }
 
+/* ----------------------------------------------------------------------------
+ * POOL GRADING — which levels deserve ink on the chart.
+ * MAJOR: H1+H4 confluence at one price, or 3+ equal touches. The zones the
+ *        market remembers — sweeps here get the real reaction.
+ * MINOR: double top/bottom (2 touches) or a lone H4 level. Worth watching,
+ *        reaction possible but thinner.
+ * TINY:  single-touch H1 wick with no confirmation — noise and trap bait.
+ *        Fully hidden from chart and panels. Display-only: the signal engine
+ *        still scans every pool, so the backtest stays valid.
+ * -------------------------------------------------------------------------- */
 function liquidity_map(price, pools, n = 5) {
-  const above = pools.filter(p => p.price >= price).sort((a, b) => a.price - b.price).slice(0, n);
-  const below = pools.filter(p => p.price < price).sort((a, b) => b.price - a.price).slice(0, n);
-  const row = p => ({
-    id: p.id, tf: p.tf, side: p.side, price: p.price,
-    touches: p.touches, premium: p.premium,
-    distance: round2(Math.abs(p.price - price)),
+  // merge cross-TF confluence into single zones (one level = one zone)
+  const zones = [];
+  const used = new Set();
+  const sorted = [...pools].sort((a, b) => a.price - b.price);
+  for (const p of sorted) {
+    if (used.has(p.id)) continue;
+    const group = [p];
+    for (const q of sorted) {
+      if (q.id !== p.id && !used.has(q.id) && q.side === p.side &&
+          Math.abs(q.price - p.price) <= CONFIG.equal_tol) {
+        group.push(q); used.add(q.id);
+      }
+    }
+    used.add(p.id);
+    const tfs = [...new Set(group.map(g => g.tf))].sort().join('+');
+    const zp = round2(group.reduce((s, g) => s + g.price, 0) / group.length);
+    const touches = Math.max(...group.map(g => g.touches));
+    const crossTF = new Set(group.map(g => g.tf)).size > 1;
+    const grade = (crossTF || touches >= 3) ? 'major'
+                : (touches >= 2 || tfs === 'H4') ? 'minor' : 'tiny';
+    zones.push({ id: group.map(g => g.id).join('+'), tf: tfs, side: p.side,
+                 price: zp, touches, grade, premium: touches >= 2 });
+  }
+  const drawn = zones.filter(z => z.grade !== 'tiny');
+  const above = drawn.filter(z => z.price >= price).sort((a, b) => a.price - b.price).slice(0, n);
+  const below = drawn.filter(z => z.price < price).sort((a, b) => b.price - a.price).slice(0, n);
+  const row = z => ({
+    id: z.id, tf: z.tf, side: z.side, price: z.price,
+    touches: z.touches, grade: z.grade, premium: z.premium,
+    distance: round2(Math.abs(z.price - price)),
   });
   return { above: above.map(row), below: below.map(row) };
 }
