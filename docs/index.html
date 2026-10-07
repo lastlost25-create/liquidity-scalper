@@ -499,9 +499,7 @@ function renderPanels(nowMs, h1c, h4c){
   const tb = $('trend');
   tb.textContent = 'H1 ' + trend;
   tb.className = 'badge' + (trend === 'UPTREND' ? ' up' : trend === 'DOWNTREND' ? ' dn' : '');
-  const sb = $('session'), sess = open ? LS.session_of(nowMs) : null;
-  sb.textContent = !open ? '○ CLOSED' : sess ? '● ' + sess : '○ OFF';
-  sb.className = 'badge' + (sess ? ' on' : '');
+  paintClock(nowMs);
 
   const map = LS.liquidity_map(price, pools);
   $('above').innerHTML = map.above.map(poolRow).join('') || '<div class="empty">none</div>';
@@ -675,6 +673,22 @@ function drawChart(nowMs){
     c.fillStyle = '#f5c542'; c.fillRect(pw, yy - 10, AXW, 20);
     c.fillStyle = '#0a0e14'; c.fillText(txt, pw + (AXW - tw) / 2, yy + 4);
   }
+}
+
+/* ---- session countdown clock (header badge, ticks every second) ---- */
+const fmtDur = ms => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600),
+        m = Math.floor(s % 3600 / 60), ss = s % 60;
+  const p = n => String(n).padStart(2, '0');
+  return (d ? d + 'd ' : '') + p(h) + ':' + p(m) + ':' + p(ss);
+};
+function paintClock(nowMs){
+  const sb = $('session'); if(!sb || !window.LS) return;
+  const cd = LS.session_countdown(nowMs);
+  sb.textContent = (cd.live ? '● ' : '○ ') + cd.sess + ' ' + cd.verb + ' ' + fmtDur(cd.ms);
+  sb.className = 'badge' + (cd.live ? ' on' : '');
+  sb.title = cd.live ? 'Killzone ends in ' + fmtDur(cd.ms) : 'Next killzone opens in ' + fmtDur(cd.ms);
 }
 
 /* ---------------- live wiring ---------------- */
@@ -948,6 +962,7 @@ async function boot(){
     connectWS();
   }
   setInterval(refreshHigherTFs, 5 * 60 * 1000);
+  setInterval(() => paintClock(Date.now()), 1000);  // session countdown clock
   /* WS watchdog: silently-dead sockets (common on mobile) get force-reconnected,
      with backfill so the dead minutes don't leave a hole in the chart */
   setInterval(() => {
