@@ -1230,7 +1230,17 @@ async function boot(){
 
 /* Chart snapshot (Mickey, 7 Oct 2026): one tap on 📸 saves the current chart
    as a PNG (with setup tab + timestamp stamped on it) so it can be shared
-   straight into the chat for chart talk. */
+   straight into the chat for chart talk. The signal box is an HTML overlay,
+   so a mirror of it is drawn onto the image too. */
+function rr(c, x, y, w, h, r){
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
 function snapshotChart(){
   const cv = $('chart');
   if(!cv || !cv.width) return;
@@ -1241,12 +1251,61 @@ function snapshotChart(){
     c.fillStyle = '#0a0e14';
     c.fillRect(0, 0, out.width, out.height);
     c.drawImage(cv, 0, 0);
-    // stamp: setup tab + UTC time, so a shared shot is self-describing
     const fs = Math.max(28, Math.round(out.width / 42));
+    const pad = fs * 0.55;
+    // stamp: setup tab + UTC time, so a shared shot is self-describing
     c.font = '700 ' + fs + 'px system-ui';
     c.fillStyle = 'rgba(245,197,66,.92)';
     const stamp = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-    c.fillText(chartTab.toUpperCase() + ' · ' + stamp, fs * 0.7, fs * 1.4);
+    c.fillText(chartTab.toUpperCase() + ' · ' + stamp, pad, fs * 1.3);
+
+    // signal-box card: mirrors the on-screen panel text (title, sub, plan,
+    // reason), colored by panel state like the real box
+    const sp = $('signalPanel');
+    const cls = sp ? sp.className : '';
+    const accent = /LONG|TP/.test(cls) ? '#22c55e'
+                 : /SHORT|SL/.test(cls) ? '#ef4444' : '#9aa3b8';
+    const txt = id => { const e = $(id); return e ? e.textContent.trim() : ''; };
+    const lines = [];
+    const vt = txt('vtext'), vs = txt('vsub'), rs = txt('reason');
+    if (vt) lines.push({ t: vt, b: true });
+    if (vs) lines.push({ t: vs });
+    const plan = $('plan');
+    if (plan && plan.style.display !== 'none') {
+      lines.push({ t: `EN ${txt('pEntry')} · SL ${txt('pSL')} · TP ${txt('pTP')} · 1:${txt('pRR')}` });
+      const t2 = $('tp2row'), t3 = $('tp3row');
+      if (t2 && t2.style.display !== 'none' && txt('pTP2')) lines.push({ t: 'TP2 ' + txt('pTP2') });
+      if (t3 && t3.style.display !== 'none' && txt('pTP3')) lines.push({ t: 'TP3 ' + txt('pTP3') });
+    }
+    if (rs) lines.push({ t: rs });
+    if (lines.length) {
+      const lh = fs * 1.12, maxW = out.width - pad * 2;
+      const fnt = L => (L.b ? '700 ' : '600 ') + Math.round(fs * (L.b ? 0.8 : 0.7)) + 'px system-ui';
+      // measure, truncating any line wider than the canvas
+      let w = 0;
+      for (const L of lines) {
+        c.font = fnt(L);
+        while (L.t.length > 4 && c.measureText(L.t).width > maxW - pad * 2)
+          L.t = L.t.slice(0, -2);
+        if (L.t.length <= 4) L.t += '…';
+        w = Math.max(w, c.measureText(L.t).width);
+      }
+      const bx = pad, by = fs * 1.9, bw = w + pad * 2, bh = lines.length * lh + pad * 1.4;
+      c.fillStyle = 'rgba(10,14,20,.9)';
+      c.strokeStyle = accent; c.lineWidth = Math.max(2, fs * 0.06);
+      rr(c, bx, by, bw, bh, fs * 0.28);
+      c.fill(); c.stroke();
+      c.textBaseline = 'top';
+      let yy = by + pad * 0.7;
+      for (const L of lines) {
+        c.font = fnt(L);
+        c.fillStyle = L.b ? accent : '#d7dce8';
+        c.fillText(L.t, bx + pad, yy);
+        yy += lh;
+      }
+      c.textBaseline = 'alphabetic';
+    }
+
     const a = document.createElement('a');
     a.download = 'sniper-' + chartTab + '-' +
       new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.png';
