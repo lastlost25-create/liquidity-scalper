@@ -59,6 +59,18 @@
   #poolPanel{top:10px;right:10px;width:212px;max-height:46%;overflow-y:auto;display:none}
   #poolPanel.open{display:block}
   #poolTab.active{border-color:var(--gold);color:var(--gold)}
+  #rulesPanel{right:10px;bottom:10px;width:252px;max-height:56%;overflow-y:auto;display:none;
+    border-color:#7a5b12}
+  #rulesPanel.open{display:block}
+  #rulesTab.active{border-color:var(--gold);color:var(--gold)}
+  #rulesPanel h2{color:var(--gold)}
+  #rulesPanel .rsub{font-size:10px;color:var(--dim);margin:-4px 0 6px}
+  .rule{display:flex;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);
+    font-size:11.5px;line-height:1.5}
+  .rule:last-child{border-bottom:none}
+  .rule .n{flex:0 0 18px;height:18px;border-radius:50%;background:#3a2c07;color:var(--gold);
+    font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .rule b{color:#ffd97a}
   .pool{display:flex;justify-content:space-between;align-items:center;
     padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}
   .pool:last-child{border-bottom:none}
@@ -86,6 +98,7 @@
     #vtext{font-size:24px}
     .plan b{font-size:13px}
     #poolPanel{width:172px}
+    #rulesPanel{width:200px}
     #logPanel{max-width:250px}
     #topbar h1{font-size:13px}
     #price{font-size:18px}
@@ -98,6 +111,7 @@
   <h1>⚡ LIQUIDITY <span>SCALPER</span></h1>
   <button class="sym" id="symLabel" title="tap to switch feed">···</button>
   <button class="sym" id="poolTab" title="tap to show/hide liquidity pools">POOLS</button>
+  <button class="sym" id="rulesTab" title="tap to show/hide discipline rules">RULES</button>
   <span class="badge" id="fresh">···</span>
   <div id="price">–</div>
   <span class="badge" id="trend">H1 ···</span>
@@ -129,6 +143,16 @@
     <div id="above"><div class="empty">…</div></div>
     <h2 style="margin-top:8px">Pools below</h2>
     <div id="below"><div class="empty">…</div></div>
+  </div>
+
+  <div class="panel" id="rulesPanel">
+    <h2>⚠ Discipline rules</h2>
+    <div class="rsub">Advice, not strategy — listen before you trade.</div>
+    <div class="rule"><span class="n">1</span><span><b>Never compromise on the rules.</b> No exceptions, no "just this once".</span></div>
+    <div class="rule"><span class="n">2</span><span>Every trade gets a <b>stop loss</b> — a hard stop in the system, <b>always</b>. Never a mental stop.</span></div>
+    <div class="rule"><span class="n">3</span><span>When the market proves you wrong, <b>accept it</b>. Step away, find the next trade later. Don't fight the market — it will take you out.</span></div>
+    <div class="rule"><span class="n">4</span><span>Wait for the last level. Take only the <b>BEST</b> trade — any strategy works if you only take the best.</span></div>
+    <div class="rule"><span class="n">5</span><span>Don't chase <b>daily</b> profit — that ruins you one day. Think in <b>months</b>: losing days are fine, the month is what counts.</span></div>
   </div>
 
   <div class="panel" id="logPanel">
@@ -857,6 +881,11 @@ async function boot(){
   $('symLabel').addEventListener('click', toggleFeed);
   $('poolTab').addEventListener('click', () => {
     const p = $('poolPanel'), t = $('poolTab');
+    const open = p.classList.toggle('open');
+    t.classList.toggle('active', open);
+  });
+  $('rulesTab').addEventListener('click', () => {
+    const p = $('rulesPanel'), t = $('rulesTab');
     const open = p.classList.toggle('open');
     t.classList.toggle('active', open);
   });
