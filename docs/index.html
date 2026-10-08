@@ -39,6 +39,7 @@
   .panel h2{font-size:10px;color:var(--dim);text-transform:uppercase;
     letter-spacing:1px;margin-bottom:8px}
   #signalPanel{top:10px;left:10px;max-width:305px}
+  #vmini{display:none;font-weight:700;font-size:11px;letter-spacing:.5px;margin:0 2px}
   #vtext{font-size:30px;font-weight:800;letter-spacing:2px}
   #signalPanel.WAIT #vtext{color:var(--dim)}
   #signalPanel.LONG{border-color:var(--green)} #signalPanel.LONG #vtext{color:var(--green)}
@@ -152,6 +153,10 @@
     #rulesPanel{width:150px}
     #logPanel{max-width:200px}
     #logPanel td{padding:5px 3px}
+    /* MOBILE: verdict stays visible in the header when the signal panel is
+       collapsed (it boots collapsed on phones so the chart stays clear) */
+    #vmini{display:inline}
+    #signalPanel.collapsed{padding:6px 10px}
   }
 </style>
 </head>
@@ -201,7 +206,7 @@
   </div>
 
   <div class="panel WAIT collapsible" id="signalPanel">
-    <h2>Signal <span class="chev">▾</span></h2>
+    <h2>Signal <span id="vmini">WAIT</span> <span class="chev">▾</span></h2>
     <div class="cbody">
     <div id="vtext">WAIT</div>
     <div id="vsub">connecting…</div>
@@ -552,6 +557,14 @@ function setCollapsed(panel, collapsed){
   const c = panel.querySelector('h2 .chev');
   if (c) c.textContent = collapsed ? '▸' : '▾';
 }
+/* Mobile mini-verdict in the signal panel header (visible when collapsed) */
+function setVmini(txt, color){
+  const el = $('vmini');
+  if(!el) return;
+  el.textContent = txt;
+  el.style.color = color || '';
+}
+const isMobileView = () => window.innerWidth <= 700;
 // set verdict class without wiping collapsible/collapsed state
 function setPanelClass(el, cls){
   const keep = ['collapsible', 'collapsed'].filter(c => el.classList.contains(c));
@@ -594,6 +607,7 @@ function renderPanels(nowMs, h1c, h4c){
     const lbl = done.outcome === 'TP' ? '🎯 TP HIT'
       : tpWin ? `🎯 ${done.outcome} HIT` : lost ? '🛑 SL HIT' : '⌛ EXPIRED';
     $('vtext').textContent = lbl;
+    setVmini(lbl, rc);
     plan.style.display = 'none';
     const kindTag = done.kind === 'swing' ? 'SWING ' : '';
     $('vsub').textContent = kindTag + done.direction + ' · ' + fmtT(Date.parse(done.signal_at)) + ' PKT · ' + done.session;
@@ -610,6 +624,7 @@ function renderPanels(nowMs, h1c, h4c){
     setPanelClass(sp, live.direction);
     const kindTag = live.kind === 'swing' ? 'SWING ' : '';
     $('vtext').textContent = kindTag + live.direction;
+    setVmini(kindTag + live.direction, live.direction === 'LONG' ? 'var(--green)' : 'var(--red)');
     plan.style.display = 'grid';
     $('pEntry').textContent = live.entry.toFixed(2);
     $('pSL').textContent = live.sl.toFixed(2);
@@ -628,6 +643,7 @@ function renderPanels(nowMs, h1c, h4c){
     plan.style.display = 'none';
     setPanelClass(sp, 'WAIT');
     $('vtext').textContent = 'WAIT';
+    setVmini('WAIT', 'var(--dim)');
     const sess = open ? LS.session_of(nowMs) : null;
     const nSig = signalsToday.length + swingSignalsToday.length;
     const usedTxt = nSig ? ` · ${nSig} signal${nSig > 1 ? 's' : ''} today` : '';
@@ -784,6 +800,13 @@ function drawChart(nowMs){
     c.fillStyle = '#b9c1d4'; c.fillText(v.toFixed(1), pw + 6, yy + 4);
   }
 
+  const narrow = W <= 700;   // phones: shorter labels, no stacking
+  const labelY = [];       // per-frame label slots — skip a label that would
+  const claimLabel = yy => {  // collide with an already-drawn one (text soup)
+    for(const t of labelY) if(Math.abs(t - yy) < 14) return false;
+    labelY.push(yy);
+    return true;
+  };
   const band = (p, rgb) => {
     const major = p.grade === 'major';
     const half = major ? .30 : .18;                 // major zones are taller
@@ -800,8 +823,9 @@ function drawChart(nowMs){
     const _f = c.font;
     c.font = (major ? '700 11px' : '500 10px') + ' system-ui';
     c.fillStyle = major ? '#f5c542' : '#8a93a8';
-    c.fillText((major ? 'MAJOR ' : '') + p.tf + (p.touches >= 2 ? ' ★×' + p.touches : '') +
-               ' · ' + p.price.toFixed(2), 6, mid - 4);
+    const txt = (major ? 'MAJOR ' : '') + p.tf + (p.touches >= 2 ? ' ★×' + p.touches : '') +
+                (narrow ? ' ' + p.price.toFixed(0) : ' · ' + p.price.toFixed(2));
+    if(claimLabel(mid - 4)) c.fillText(txt, 6, mid - 4);
     c.font = _f;
   };
   const price = price0;
@@ -830,7 +854,9 @@ function drawChart(nowMs){
       const _f = c.font;
       c.font = (major ? '700 11px' : '500 10px') + ' system-ui';
       c.fillStyle = major ? ac : hexA(ac, .78);
-      c.fillText(cfg.label(z, major), 6, mid - 4);
+      let ltxt = cfg.label(z, major);
+      if(narrow) ltxt = ltxt.replace(/ · /g, ' ').replace(/(\d+)\.\d{2}$/, '$1');
+      if(claimLabel(mid - 4)) c.fillText(ltxt, 6, mid - 4);
       c.font = _f;
     }
     const pin = (z, top) => {
@@ -1586,6 +1612,9 @@ function exitReplay(){
 async function boot(){
   /* Primary: Yahoo XAUUSD spot (closest free match to Exness/OANDA).
      Fallback: Binance PAXG (verified working). */
+  // mobile: signal panel boots collapsed (slim verdict bar in the header) so
+  // the small chart stays clear; tap to expand, auto-opens on a live signal
+  if(isMobileView()) setCollapsed($('signalPanel'), true);
   try {
     const [m1, h1] = await Promise.all([
       yahooKlines('1m', '1d'), yahooKlines('1h', '1mo')]);
