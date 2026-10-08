@@ -164,7 +164,7 @@
 
 <div id="topbar">
   <h1>⚡ LIQUIDITY <span>SCALPER</span></h1>
-  <button class="sym" id="symLabel">···</button>
+  <button class="sym" id="symLabel" title="tap to retry the feed">···</button>
   <button class="sym" id="poolTab" title="tap to show/hide liquidity pools">POOLS</button>
   <button class="sym" id="rulesTab" title="tap to show/hide discipline rules">RULES</button>
   <button class="sym" id="sndBtn" title="tap to mute/unmute the new-signal sound">🔊</button>
@@ -1046,25 +1046,23 @@ function mergeBars(bars){
   let added = 0;
   for(const b of bars){ if(!map.has(b.t)){ map.set(b.t, b); added++; } else map.set(b.t, b); }
   const before = M1.length;
-  M1 = [...map.values()].sort((a, b) => a.t - b.t).slice(-1600);
+  M1 = [...map.values()].sort((a, b) => a.t - b.t).slice(-5200);
   return M1.length !== before || added > 0;
 }
 
 /* ================= FEED: TradingView OANDA:XAUUSD only =================
    (8 Oct 2026 — Mickey's call: Yahoo and PAXG removed.)
-   Unofficial TradingView chart websocket, no login. Three series give the
-   engine real multi-timeframe history: M1 x1500, H1 x2000, D1 x365. */
+   Unofficial TradingView chart websocket, no login. SINGLE M1 series
+   (x5000 bars — the most one request gives); H1/H4/M15/D1 are resampled
+   locally. Lesson learned the hard way: 3 simultaneous series got throttled
+   and the page sat on "connecting" forever — one light request is reliable. */
 const TV_WS_URLS = ['wss://data.tradingview.com/socket.io/websocket',
                     'wss://prodata.tradingview.com/socket.io/websocket'];
 const TV_SYMBOL = 'OANDA:XAUUSD';          // closest to Exness on TradingView
-const TV_SERIES = [
-  { key: 'm1', tf: '1',  n: 1500 },
-  { key: 'h1', tf: '60', n: 2000 },
-  { key: 'd1', tf: '1D', n: 365 },
-];
+const TV_M1_BARS = 5000;
 let tvws = null, tvFails = 0, tvUrlIx = 0, lastTVMsg = 0;
-let tvBuf = '', tvSid = null, tvSeriesIds = {};
-let tvReady = false;                        // M1 + H1 arrived -> engine may run
+let tvBuf = '', tvSid = null, tvSeries = null;
+let tvReady = false;                        // M1 history arrived -> engine may run
 
 const tvFrame = (m, p) => {
   const s = JSON.stringify({ m, p });
@@ -1088,9 +1086,10 @@ function tvSplit(chunk){
   tvBuf = tvBuf.slice(i);
   return msgs;
 }
-/* Extract OHLC bars from a timescale_update / du series node */
-function tvBarsFrom(node){
+/* Extract OHLC bars from a timescale_update / du payload for our series */
+function tvBarsFrom(payload){
   const out = [];
+  const node = payload && payload[tvSeries];
   const s = node && node.s;
   if(!Array.isArray(s)) return out;
   for(const b of s){
@@ -1108,21 +1107,19 @@ function tvResample(m1, ms){
   }
   return out;
 }
-/* Merge fetched bars into an existing HTF array, deduped by timestamp */
-function mergeArr(arr, bars){
-  const map = new Map(arr.map(b => [b.t, b]));
-  for(const b of bars) map.set(b.t, b);
-  return [...map.values()].sort((a, b) => a.t - b.t);
+/* Higher timeframes are resampled locally from the M1 store — no extra
+   TradingView requests, so nothing to throttle. */
+function buildHTFfromM1(){
+  H1 = tvResample(M1, 3600000);
+  H4 = resample4h(H1);
+  M15 = tvResample(M1, 900000);
+  D1 = tvResample(M1, 86400000);
 }
-/* Engine needs M1 ticks plus real H1 depth for pools; D1 feeds PDH/PDL +
-   the daily-open target. Ready once M1 and H1 both have substance. */
 function tvCheckReady(){
   if(tvReady) return;
-  if(M1.length > 500 && H1.length > 50){
-    if(!D1.length) D1 = tvResample(M1, 86400000);
-    H4 = resample4h(H1);
-    M15 = tvResample(M1, 900000);
+  if(M1.length > 500){
     tvReady = true;
+    buildHTFfromM1();
     recompute();
     setFresh('live');
   }
@@ -1134,26 +1131,15 @@ function tvHandleMsg(raw){
   lastTVMsg = Date.now();
   if(m.m === 'series_completed'){ tvCheckReady(); return; }
   if(m.m !== 'timescale_update' && m.m !== 'du') return;
-  const data = m.p && m.p[1];
-  if(!data) return;
-  for(const sid of Object.keys(data)){
-    const key = Object.keys(tvSeriesIds).find(k => tvSeriesIds[k] === sid);
-    if(!key) continue;
-    const bars = tvBarsFrom(data[sid]);
-    if(!bars.length) continue;
-    if(key === 'm1'){
-      mergeBars(bars);
-      if(tvReady) onTick(bars[bars.length - 1]);
-      else drawChart(Date.now());
-    } else if(key === 'h1'){
-      H1 = mergeArr(H1, bars);
-      H4 = resample4h(H1);
-      if(M1.length) M15 = tvResample(M1, 900000);
-    } else if(key === 'd1'){
-      D1 = mergeArr(D1, bars);
-    }
+  const bars = tvBarsFrom(m.p && m.p[1]);
+  if(!bars.length) return;
+  mergeBars(bars);
+  if(!tvReady){
+    if(M1.length > 500){ tvReady = true; buildHTFfromM1(); recompute(); setFresh('live'); }
+    else drawChart(Date.now());
+    return;
   }
-  tvCheckReady();
+  onTick(bars[bars.length - 1]);   // live tick -> light update path
 }
 function tvConnect(){
   try { tvws = new WebSocket(TV_WS_URLS[tvUrlIx % TV_WS_URLS.length]); }
@@ -1165,11 +1151,7 @@ function tvConnect(){
     tvws.send(tvFrame('chart_create_session', [tvSid, '']));
     tvws.send(tvFrame('resolve_symbol', [tvSid, symId,
       '{"symbol":"' + TV_SYMBOL + '","adjustment":"splits","session":"regular"}']));
-    for(const s of TV_SERIES){
-      const sid = 'sds_' + tvSid + '_' + s.key;
-      tvSeriesIds[s.key] = sid;
-      tvws.send(tvFrame('create_series', [tvSid, sid, 's1', symId, s.tf, s.n]));
-    }
+    tvws.send(tvFrame('create_series', [tvSid, tvSeries, 's1', symId, '1', TV_M1_BARS]));
   };
   tvws.onmessage = e => {
     if(typeof e.data !== 'string') return;
@@ -1177,13 +1159,20 @@ function tvConnect(){
   };
   const down = () => { try { tvws && tvws.close(); } catch(e2){} tvDown(); };
   tvws.onclose = down; tvws.onerror = down;
-  // safety net: if history stalls, mark ready from whatever arrived
-  setTimeout(() => { if(!tvReady && M1.length > 200) tvCheckReady(); }, 25000);
+  // safety net: if history stalls, build from whatever arrived
+  setTimeout(() => {
+    if(!tvReady && M1.length > 200){ tvReady = true; buildHTFfromM1(); recompute(); setFresh('live'); }
+  }, 25000);
 }
-/* TV is the only feed: on failure keep retrying it (backoff capped at 30s),
-   never silently swap to a different price source. */
+/* On repeated failure, say so plainly and let him tap the label to retry —
+   instead of spinning on "connecting" forever with no explanation. */
 function tvDown(){
   tvFails++; tvUrlIx++;
+  if(tvFails >= 5){
+    setFresh('reconnecting');
+    $('vsub').textContent = 'TradingView unreachable — tap the TV label to retry';
+    return;
+  }
   setFresh('reconnecting');
   setTimeout(tvConnect, Math.min(30000, 2000 * tvFails));
 }
@@ -1192,14 +1181,22 @@ function tvResync(){
   tvBuf = '';
   tvConnect();
 }
+function tvRetry(){
+  tvFails = 0;
+  $('vsub').textContent = 'connecting…';
+  connectTV();
+}
 function connectTV(){
   try { tvws && tvws.close(); } catch(e){}
-  tvws = null; tvFails = 0; tvBuf = ''; tvReady = false; tvSeriesIds = {};
+  tvws = null; tvFails = 0; tvBuf = ''; tvReady = false;
   tvSid = 'cs_' + Math.random().toString(36).slice(2, 10);
+  tvSeries = 'sds_' + Math.random().toString(36).slice(2, 8);
   applyFeedLabel();
   setFresh('connecting');
   tvConnect();
 }
+
+
 
 /* ---- MT5-style crosshair + OHLC inspector (Mickey, 7 Oct 2026):
    hover a candle (desktop) or tap it (touch) to see its time, O/H/L/C,
@@ -1444,6 +1441,7 @@ async function boot(){
     const [nowMs, m1c, h1c, h4c] = closedView();
     render(nowMs, m1c, h1c, h4c);
   });
+  $('symLabel').addEventListener('click', tvRetry);   // manual feed retry
   $('poolTab').addEventListener('click', () => {
     const p = $('poolPanel'), t = $('poolTab');
     const open = p.classList.toggle('open');
