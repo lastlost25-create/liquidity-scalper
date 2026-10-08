@@ -40,6 +40,14 @@
     letter-spacing:1px;margin-bottom:8px}
   #signalPanel{top:10px;left:10px;max-width:305px}
   #vmini{display:none;font-weight:700;font-size:11px;letter-spacing:.5px;margin:0 2px}
+  #fhPrompt{position:fixed;top:56px;left:50%;transform:translateX(-50%);z-index:60;
+    background:#0d1420;border:1px solid var(--gold);border-radius:12px;
+    padding:14px 16px;max-width:340px;width:calc(100vw - 40px);
+    box-shadow:0 8px 32px rgba(0,0,0,.6)}
+  #fhPrompt a{color:var(--gold)}
+  #fhPrompt button{background:var(--gold);color:#111;border:none;border-radius:8px;
+    padding:8px 12px;font-weight:700;cursor:pointer}
+  #fhSave{background:var(--gold) !important}
   #vtext{font-size:30px;font-weight:800;letter-spacing:2px}
   #signalPanel.WAIT #vtext{color:var(--dim)}
   #signalPanel.LONG{border-color:var(--green)} #signalPanel.LONG #vtext{color:var(--green)}
@@ -180,6 +188,27 @@
   <span class="badge" id="trend">H1 ···</span>
   <span class="badge" id="session">···</span>
 </div>
+<!-- Finnhub key prompt (8 Oct 2026): OANDA-sourced XAU/USD via Finnhub's free
+     API. The key is the user's own — pasted once per device, kept in
+     localStorage, never in the code or the repo. -->
+<div id="fhPrompt" style="display:none">
+  <div id="fhMsg">Paste your free Finnhub API key for the real OANDA gold price.</div>
+  <div style="font-size:11px;color:var(--dim);margin:6px 0;line-height:1.5">
+    Free, 2 minutes, one time:<br>
+    1. Sign up free at
+    <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io</a>
+    (email only, no KYC)<br>
+    2. Copy your API key from the dashboard<br>
+    3. Paste it below — it stays in <b>this browser only</b>, sent only to Finnhub.
+  </div>
+  <input id="fhKey" type="password" placeholder="paste API key here"
+    style="width:100%;box-sizing:border-box;background:#0a0e14;border:1px solid var(--line);
+    border-radius:8px;color:var(--txt);padding:8px 10px;font-size:12px;margin:4px 0" autocomplete="off">
+  <div style="display:flex;gap:8px;margin-top:6px">
+    <button id="fhSave" style="flex:1">Use OANDA feed</button>
+    <button id="fhCancel" style="flex:0 0 auto">Cancel</button>
+  </div>
+</div>
 
 <div id="tfbar">
   <button class="tf active" data-tf="M1">M1</button>
@@ -273,7 +302,7 @@ const PAXG_WS = 'wss://data-stream.binance.vision/ws/paxgusdt@kline_1m';
 const PKT = 'Asia/Karachi';
 const FRESH_MIN = 120;               // active-signal recency, like the Python engine
 
-let FEED = null;                     // 'yahoo' | 'paxg' | 'tv'
+let FEED = null;                     // 'yahoo' | 'paxg' | 'finnhub' | 'tv'
 let M1 = [], H1 = [], H4 = [], D1 = []; // M1 includes the forming candle last
 let pools = [], signalsToday = [];
 let swingSignalsToday = [];   // v2 sniper swing setups (HTF pool -> M1 reclaim)
@@ -400,6 +429,9 @@ function applyFeedLabel(){
   if(FEED === 'yahoo'){
     $('symLabel').innerHTML = 'XAUUSD · ' + TF + ' <span style="opacity:.5">⇄</span>';
     $('feedNote').textContent = 'XAUUSD spot via Yahoo Finance · close to Exness/OANDA · tap label to switch';
+  } else if(FEED === 'finnhub'){
+    $('symLabel').innerHTML = 'OANDA · ' + TF + ' <span style="opacity:.5">⇄</span>';
+    $('feedNote').textContent = 'OANDA XAU/USD price via Finnhub (free key) · tap label to switch';
   } else if(FEED === 'tv'){
     $('symLabel').innerHTML = 'TV · ' + TF + ' <span style="opacity:.5">⇄</span>';
     $('feedNote').textContent = 'TradingView OANDA:XAUUSD (TEST feed) · tap label to switch';
@@ -409,7 +441,7 @@ function applyFeedLabel(){
   }
 }
 
-/* Manual feed toggle (tap the top-bar label): cycles Yahoo -> PAXG -> TV -> Yahoo */
+/* Manual feed toggle (tap the top-bar label): Yahoo -> PAXG -> Finnhub(OANDA) -> TV -> Yahoo */
 async function attemptYahooNow(){
   if(FEED !== 'paxg' && FEED !== 'tv') return false;
   try {
@@ -433,7 +465,8 @@ async function attemptYahooNow(){
 }
 function toggleFeed(){
   if(FEED === 'yahoo'){ switchToPaxg(); }
-  else if(FEED === 'paxg'){ connectTV(); }
+  else if(FEED === 'paxg'){ connectFinnhub(); }
+  else if(FEED === 'finnhub'){ connectTV(); }
   else if(FEED === 'tv'){
     setFresh('connecting');
     attemptYahooNow().then(ok => { if(!ok) tvResync(); });
@@ -1370,6 +1403,7 @@ function connectTV(){
 /* Halt every live feed (yahoo poll, paxg socket, tv socket) before switching */
 function stopFeeds(){
   if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+  if(finnhubTimer){ clearInterval(finnhubTimer); finnhubTimer = null; }
   if(yahooRetryTimer){ clearInterval(yahooRetryTimer); yahooRetryTimer = null; }
   try { ws && ws.close(); } catch(e){}
   try { tvws && tvws.close(); } catch(e){}
@@ -1418,7 +1452,13 @@ function schedulePoll(){
 
 async function refreshHigherTFs(){
   try {
-    if(FEED === 'yahoo'){
+    const nowSec = Math.floor(Date.now() / 1000);
+    if(FEED === 'finnhub'){
+      const h1 = await finnhubKlines(60, nowSec - 2000 * 3600, nowSec);
+      H1 = h1; H4 = resample4h(h1);
+      try { M15 = await finnhubKlines(15, nowSec - 2000 * 900, nowSec); } catch(e){}
+      try { D1 = await finnhubKlines('D', nowSec - 500 * 86400, nowSec); } catch(e){}
+    } else if(FEED === 'yahoo'){
       const h1 = await yahooKlines('1h', '1mo');
       H1 = h1; H4 = resample4h(h1);
       try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
@@ -1431,6 +1471,114 @@ async function refreshHigherTFs(){
     }
     recompute();
   } catch(e){}
+}
+
+/* ---------------- Finnhub feed (Mickey, 8 Oct 2026): OANDA-sourced XAU/USD
+   via Finnhub's FREE API. Free key from finnhub.io (email signup, no KYC,
+   no country block). The key is the user's own: pasted once per device into
+   the prompt, kept in localStorage, never in the code or the repo, sent
+   only to Finnhub. Opt-in feed: tap the top-bar label to cycle to it. */
+const FINNHUB_REST = 'https://finnhub.io/api/v1';
+const FINNHUB_KEY = 'finnhub_token';
+const finnhubKey = () => (localStorage.getItem(FINNHUB_KEY) || '').trim();
+let finnhubFails = 0, finnhubTimer = null;
+
+async function finnhubKlines(resolution, fromSec, toSec){
+  const key = finnhubKey();
+  if(!key) throw new Error('no Finnhub key');
+  const r = await fetch(
+    `${FINNHUB_REST}/forex/candle?symbol=OANDA:XAU_USD&resolution=${resolution}&from=${fromSec}&to=${toSec}&token=${key}`);
+  if(r.status === 401 || r.status === 403) throw new Error('bad Finnhub key');
+  if(r.status === 429) throw new Error('Finnhub rate limit (free: 60/min)');
+  if(!r.ok) throw new Error('Finnhub HTTP ' + r.status);
+  const j = await r.json();
+  if(j.s !== 'ok' || !Array.isArray(j.t)) return [];
+  const out = [];
+  for(let i = 0; i < j.t.length; i++){
+    if(j.o[i] == null || j.h[i] == null || j.l[i] == null || j.c[i] == null) continue;
+    out.push({ t: j.t[i] * 1000, o: +j.o[i], h: +j.h[i], l: +j.l[i], c: +j.c[i] });
+  }
+  return out;
+}
+function showFinnhubPrompt(msg){
+  if(msg) $('fhMsg').textContent = msg;
+  $('fhPrompt').style.display = 'block';
+  setTimeout(() => $('fhKey').focus(), 50);
+}
+function hideFinnhubPrompt(){ $('fhPrompt').style.display = 'none'; $('fhKey').value = ''; }
+function finnhubKeyBad(){
+  localStorage.removeItem(FINNHUB_KEY);
+  showFinnhubPrompt("That key didn't work (Finnhub said unauthorized). Grab a fresh one from your finnhub.io dashboard and paste it here.");
+  setFresh('reconnecting');
+}
+async function finnhubPoll(){
+  try {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const bars = await finnhubKlines(1, nowSec - 5 * 60, nowSec);
+    if(!bars.length) throw new Error('empty finnhub poll');
+    const lastT = M1.length ? M1[M1.length - 1].t : 0;
+    const newest = bars[bars.length - 1];
+    mergeBars(bars);
+    if(newest.t > lastT){ finnhubFails = 0; recompute(); }
+    else {
+      if((Date.now() - lastT) / 60000 > 4) throw new Error('stale finnhub feed');
+      finnhubFails = 0;
+      const [nowMs, m1c, h1c, h4c] = closedView(); render(nowMs, m1c, h1c, h4c);
+    }
+    setFresh('live');
+  } catch(e){
+    if(/bad Finnhub key|no Finnhub key/.test(e.message)){ finnhubKeyBad(); return; }
+    finnhubFails++;
+    console.warn('finnhub poll fail #' + finnhubFails, e);
+    setFresh('reconnecting');
+  }
+}
+async function finnhubResync(){
+  try {
+    finnhubFails = 0;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const bars = await finnhubKlines(1, nowSec - 30 * 60, nowSec); mergeBars(bars);
+    recompute();
+    setFresh('live');
+  } catch(e){
+    if(/bad Finnhub key/.test(e.message)) finnhubKeyBad();
+    else setFresh('reconnecting');
+  }
+}
+/* Switch to the Finnhub (OANDA-price) feed. quiet=true suppresses the key
+   prompt (used by boot when falling back to Yahoo). */
+async function connectFinnhub(quiet){
+  if(!finnhubKey()){
+    if(!quiet) showFinnhubPrompt();
+    return false;
+  }
+  stopFeeds();
+  setFresh('connecting');
+  try {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const [m1, h1] = await Promise.all([
+      finnhubKlines(1, nowSec - 5000 * 60, nowSec),
+      finnhubKlines(60, nowSec - 2000 * 3600, nowSec)]);
+    if(m1.length < 30) throw new Error('thin finnhub data');
+    M1 = m1; H1 = h1; H4 = resample4h(h1);
+    try { M15 = await finnhubKlines(15, nowSec - 2000 * 900, nowSec); } catch(e){}
+    try { D1 = await finnhubKlines('D', nowSec - 500 * 86400, nowSec); } catch(e){}
+    FEED = 'finnhub'; finnhubFails = 0;
+    applyFeedLabel();
+    recompute();
+    setFresh('live');
+    finnhubTimer = setInterval(finnhubPoll, 15000);
+    return true;
+  } catch(e){
+    if(/bad Finnhub key/.test(e.message)){
+      localStorage.removeItem(FINNHUB_KEY);   // don't retry a dead key on every boot
+      if(!quiet) showFinnhubPrompt("That key didn't work (Finnhub said unauthorized). Grab a fresh one from your finnhub.io dashboard and paste it here.");
+    }
+    else if(!quiet && /no Finnhub key/.test(e.message)){ showFinnhubPrompt(); }
+    else if(!quiet){ err('Finnhub feed failed: ' + e.message); }
+    setFresh('reconnecting');
+    return false;
+  }
 }
 
 /* ---- MT5-style crosshair + OHLC inspector (Mickey, 7 Oct 2026):
@@ -1653,9 +1801,22 @@ async function boot(){
   // mobile: signal panel boots collapsed (slim verdict bar in the header) so
   // the small chart stays clear; tap to expand, auto-opens on a live signal
   if(isMobileView()) setCollapsed($('signalPanel'), true);
-  // feed label is always tappable (Yahoo -> PAXG -> TV), even if boot fails
+  // feed label is always tappable (Yahoo -> PAXG -> Finnhub -> TV), even if boot fails
   $('symLabel').addEventListener('click', toggleFeed);
-  const ok = await bootFeeds();
+  // Finnhub key prompt buttons
+  $('fhSave').addEventListener('click', () => {
+    const t = $('fhKey').value.trim();
+    if(!t){ $('fhMsg').textContent = 'Paste the key first — it\'s on your finnhub.io dashboard after free signup.'; return; }
+    localStorage.setItem(FINNHUB_KEY, t);
+    hideFinnhubPrompt();
+    connectFinnhub();
+  });
+  $('fhCancel').addEventListener('click', hideFinnhubPrompt);
+  $('fhKey').addEventListener('keydown', e => { if(e.key === 'Enter') $('fhSave').click(); });
+  // saved Finnhub key -> boot straight to OANDA prices; else Yahoo/PAXG as usual
+  let ok = false;
+  if(finnhubKey()) ok = await connectFinnhub(true);   // quiet: no prompt on failure
+  if(!ok) ok = await bootFeeds();
   if(!ok){
     err('Could not reach any price feed. Check your connection — or tap the top-bar label to retry.');
     return;
@@ -1682,6 +1843,8 @@ async function boot(){
         try { D1 = await yahooKlines('1d', '3mo'); } catch(e2){}
       } else if(FEED === 'tv'){
         tvResync();
+      } else if(FEED === 'finnhub'){
+        await finnhubResync();
       } else {
         await paxgResync();
         try { D1 = await paxgKlines('1d', 90); } catch(e2){}
@@ -1695,7 +1858,7 @@ async function boot(){
   window.addEventListener('offline', () => setFresh('offline'));
   window.addEventListener('online', () => {
     setFresh('reconnecting');
-    if(FEED === 'paxg') paxgResync(); else if(FEED === 'tv') tvResync(); else yahooResync();
+    if(FEED === 'paxg') paxgResync(); else if(FEED === 'tv') tvResync(); else if(FEED === 'finnhub') finnhubResync(); else yahooResync();
   });
   window.addEventListener('resize', () => {
     if(!userZoomed) viewCount = tfViewCount();
