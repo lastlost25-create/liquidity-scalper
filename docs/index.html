@@ -164,7 +164,7 @@
 
 <div id="topbar">
   <h1>⚡ LIQUIDITY <span>SCALPER</span></h1>
-  <button class="sym" id="symLabel" title="tap to switch feed">···</button>
+  <button class="sym" id="symLabel">···</button>
   <button class="sym" id="poolTab" title="tap to show/hide liquidity pools">POOLS</button>
   <button class="sym" id="rulesTab" title="tap to show/hide discipline rules">RULES</button>
   <button class="sym" id="sndBtn" title="tap to mute/unmute the new-signal sound">🔊</button>
@@ -260,28 +260,20 @@
 <script>
 'use strict';
 /* Live client-side Liquidity Scalper.
- * FEED: Yahoo Finance XAUUSD=X (spot composite, tracks Exness/OANDA within ~$1)
- *       — REST history + 20s polling. No key, no account.
- *       Fallback: Binance PAXGUSDT public feed (websocket tick-live). No key.
- *       Test opt-in: TradingView OANDA:XAUUSD via unofficial chart websocket
- *       (tap the top-bar label to cycle feeds). No login.
+ * FEED: TradingView OANDA:XAUUSD only (Mickey's call, 8 Oct 2026) —
+ *       unofficial chart websocket, no login. M1 x1500 + H1 x2000 + D1 x365.
  * ENGINE: engine.js — bit-for-bit port of the Python engine (verified 14/14
  *       identical signals on 5 test dates). Closed candles only, no repaint. */
-const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X';
-const PAXG_API = 'https://data-api.binance.vision';
-const PAXG_WS = 'wss://data-stream.binance.vision/ws/paxgusdt@kline_1m';
 const PKT = 'Asia/Karachi';
 const FRESH_MIN = 120;               // active-signal recency, like the Python engine
 
-let FEED = null;                     // 'yahoo' | 'paxg' | 'tv'
 let M1 = [], H1 = [], H4 = [], D1 = []; // M1 includes the forming candle last
 let pools = [], signalsToday = [];
 let swingSignalsToday = [];   // v2 sniper swing setups (HTF pool -> M1 reclaim)
 let chartTab = 'sniper';             // chart setup tab: sniper | adv | dqrs
                                     // SNIPER = live signal setup (untouched);
                                     // ADV = 4H+Daily majors; DQRS = daily reversal map
-let ws = null, wsFails = 0, pollTimer = null, lastPrice = 0;
-let yahooFails = 0, yahooRetryTimer = null, lastWSMsg = 0;
+let lastPrice = 0;
 
 /* ---- display timeframes: the engine always runs on M1; the chart can show
    M1 / M15 / H1 / H4 / 1D. M15 is aggregated live from the M1 store; H1/H4/1D
@@ -366,22 +358,10 @@ function err(msg){
   clearTimeout(err._t); err._t = setTimeout(() => e.style.display = 'none', 8000);
 }
 
-/* ---------------- feeds ---------------- */
-async function yahooKlines(interval, range){
-  const r = await fetch(`${YAHOO}?interval=${interval}&range=${range}`);
-  if(!r.ok) throw new Error('Yahoo HTTP ' + r.status);
-  const j = await r.json();
-  const res = j.chart.result[0];
-  const q = res.indicators.quote[0];
-  const out = [];
-  for(let i = 0; i < res.timestamp.length; i++){
-    const o = q.open[i], h = q.high[i], l = q.low[i], c = q.close[i];
-    if(o == null || h == null || l == null || c == null) continue;
-    out.push({ t: res.timestamp[i] * 1000, o, h, l, c });
-  }
-  out.sort((a, b) => a.t - b.t);
-  return out;
-}
+/* ---------------- feed ---------------- */
+/* Single feed: TradingView OANDA:XAUUSD (Mickey's call, 8 Oct 2026).
+   Yahoo and PAXG were removed — the full implementation lives in the
+   "FEED: TradingView OANDA:XAUUSD only" section below. */
 function resample4h(h1){
   const out = []; let cur = null;
   for(const b of h1){
@@ -391,53 +371,9 @@ function resample4h(h1){
   }
   return out;
 }
-async function paxgKlines(interval, limit){
-  const r = await fetch(`${PAXG_API}/api/v3/klines?symbol=PAXGUSDT&interval=${interval}&limit=${limit}`);
-  if(!r.ok) throw new Error('PAXG HTTP ' + r.status);
-  return (await r.json()).map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] }));
-}
 function applyFeedLabel(){
-  if(FEED === 'yahoo'){
-    $('symLabel').innerHTML = 'XAUUSD · ' + TF + ' <span style="opacity:.5">⇄</span>';
-    $('feedNote').textContent = 'XAUUSD spot via Yahoo Finance · close to Exness/OANDA · tap label to switch';
-  } else if(FEED === 'tv'){
-    $('symLabel').innerHTML = 'TV · ' + TF + ' <span style="opacity:.5">⇄</span>';
-    $('feedNote').textContent = 'TradingView OANDA:XAUUSD (TEST feed) · tap label to switch';
-  } else {
-    $('symLabel').innerHTML = 'PAXG · ' + TF + ' ≈ XAUUSD <span style="opacity:.5">⇄</span>';
-    $('feedNote').textContent = 'PAXG feed (fallback) · tracks XAUUSD within a few $ · tap label to switch';
-  }
-}
-
-/* Manual feed toggle (tap the top-bar label): cycles Yahoo -> PAXG -> TV -> Yahoo */
-async function attemptYahooNow(){
-  if(FEED !== 'paxg' && FEED !== 'tv') return false;
-  try {
-    const m1 = await yahooKlines('1m', '1d');
-    if(m1.length < 30) throw new Error('thin yahoo');
-    const h1 = await yahooKlines('1h', '1mo');
-    if(yahooRetryTimer){ clearInterval(yahooRetryTimer); yahooRetryTimer = null; }
-    if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
-    try { ws.close(); } catch(e){}
-    try { tvws && tvws.close(); } catch(e){}
-    M1 = m1; H1 = h1; H4 = resample4h(h1);
-    try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
-    try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
-    FEED = 'yahoo'; wsFails = 0; yahooFails = 0;
-    applyFeedLabel();
-    recompute();
-    setFresh('live');
-    pollTimer = setInterval(yahooPoll, 20000);
-    return true;
-  } catch(e){ return false; }
-}
-function toggleFeed(){
-  if(FEED === 'yahoo'){ switchToPaxg(); }
-  else if(FEED === 'paxg'){ connectTV(); }
-  else if(FEED === 'tv'){
-    setFresh('connecting');
-    attemptYahooNow().then(ok => { if(!ok) tvResync(); });
-  }
+  $('symLabel').textContent = 'TV · OANDA · ' + TF;
+  $('feedNote').textContent = 'TradingView OANDA:XAUUSD · live';
 }
 
 /* Previous completed day's high/low (PDH/PDL) from daily bars — v2 sniper
@@ -1114,95 +1050,21 @@ function mergeBars(bars){
   return M1.length !== before || added > 0;
 }
 
-/* Yahoo path: 20s REST polling (no websocket on this feed).
-   3 consecutive failures (or stale data) -> switch to PAXG automatically. */
-async function yahooPoll(){
-  try {
-    const bars = await yahooKlines('1m', '1d');
-    const lastT = M1.length ? M1[M1.length - 1].t : 0;
-    const newest = bars[bars.length - 1];
-    mergeBars(bars);
-    if(newest.t > lastT){ yahooFails = 0; recompute(); }
-    else {
-      if((Date.now() - lastT) / 60000 > 4) throw new Error('stale yahoo feed');
-      yahooFails = 0;
-      const [nowMs, m1c, h1c, h4c] = closedView(); render(nowMs, m1c, h1c, h4c);
-    }
-    setFresh('live');
-  } catch(e){
-    yahooFails++;
-    console.warn('yahoo poll fail #' + yahooFails, e);
-    if(yahooFails >= 3){ switchToPaxg(); return; }
-    setFresh('reconnecting');
-  }
-}
-
-/* Full feed switch Yahoo -> PAXG (mid-session recovery, mirrors boot fallback) */
-async function switchToPaxg(){
-  if(FEED === 'paxg') return;
-  if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
-  try { tvws && tvws.close(); } catch(e){}
-  try {
-    const [m1, h1, h4] = await Promise.all([
-      paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
-    if(!m1.length) throw new Error('empty paxg');
-    M1 = m1; H1 = h1; H4 = h4;
-    try { M15 = await paxgKlines('15m', 1500); } catch(e){}
-    try { D1 = await paxgKlines('1d', 1000); } catch(e){}
-    FEED = 'paxg'; yahooFails = 0; wsFails = 0;
-    applyFeedLabel();
-    recompute();
-    setFresh('live');
-    connectWS();
-    scheduleYahooRecovery();
-  } catch(e){
-    console.warn('paxg switch failed, retrying yahoo', e);
-    yahooFails = 0;
-    setFresh('reconnecting');
-    pollTimer = setInterval(yahooPoll, 20000);
-  }
-}
-
-/* While on PAXG, silently retry Yahoo every 5 min and switch back when healthy */
-function scheduleYahooRecovery(){
-  if(yahooRetryTimer) return;
-  yahooRetryTimer = setInterval(async () => {
-    if(FEED !== 'paxg'){ clearInterval(yahooRetryTimer); yahooRetryTimer = null; return; }
-    await attemptYahooNow();   /* stays on PAXG on failure, tries again in 5 min */
-  }, 5 * 60 * 1000);
-}
-
-/* PAXG fallback path: websocket ticks, REST poll if WS is blocked */
-function connectWS(){
-  setFresh(wsFails === 0 ? 'connecting' : 'reconnecting');
-  try { ws = new WebSocket(PAXG_WS); } catch(e){ schedulePoll(); return; }
-  ws.onopen = () => { wsFails = 0; lastWSMsg = Date.now(); setFresh('live'); };
-  ws.onmessage = e => {
-    lastWSMsg = Date.now();
-    try {
-      const k = JSON.parse(e.data).k;
-      if(k) onTick({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c });
-    } catch(e2){}
-  };
-  const down = () => {
-    try { ws.close(); } catch(e2){}
-    wsFails++;
-    if(wsFails >= 3){ schedulePoll(); return; }
-    setFresh('reconnecting');
-    setTimeout(connectWS, Math.min(30000, 2000 * wsFails));
-  };
-  ws.onclose = down; ws.onerror = down;
-}
-/* TradingView feed (TEST, 8 Oct 2026 — Mickey's request): OANDA:XAUUSD via
-   TradingView's unofficial chart websocket (wss://data.tradingview.com).
-   No login needed. Unofficial = can break or throttle without notice, so this
-   stays an OPT-IN test feed: tap the top-bar label to cycle Yahoo -> PAXG -> TV.
-   Yahoo remains the default; PAXG remains the automatic fallback. */
+/* ================= FEED: TradingView OANDA:XAUUSD only =================
+   (8 Oct 2026 — Mickey's call: Yahoo and PAXG removed.)
+   Unofficial TradingView chart websocket, no login. Three series give the
+   engine real multi-timeframe history: M1 x1500, H1 x2000, D1 x365. */
 const TV_WS_URLS = ['wss://data.tradingview.com/socket.io/websocket',
                     'wss://prodata.tradingview.com/socket.io/websocket'];
 const TV_SYMBOL = 'OANDA:XAUUSD';          // closest to Exness on TradingView
+const TV_SERIES = [
+  { key: 'm1', tf: '1',  n: 1500 },
+  { key: 'h1', tf: '60', n: 2000 },
+  { key: 'd1', tf: '1D', n: 365 },
+];
 let tvws = null, tvFails = 0, tvUrlIx = 0, lastTVMsg = 0;
-let tvBuf = '', tvSid = null, tvSeries = null, tvHTFbuilt = false;
+let tvBuf = '', tvSid = null, tvSeriesIds = {};
+let tvReady = false;                        // M1 + H1 arrived -> engine may run
 
 const tvFrame = (m, p) => {
   const s = JSON.stringify({ m, p });
@@ -1226,10 +1088,9 @@ function tvSplit(chunk){
   tvBuf = tvBuf.slice(i);
   return msgs;
 }
-/* Extract OHLC bars from a timescale_update / du payload for our series */
-function tvBarsFrom(payload){
+/* Extract OHLC bars from a timescale_update / du series node */
+function tvBarsFrom(node){
   const out = [];
-  const node = payload && payload[tvSeries];
   const s = node && node.s;
   if(!Array.isArray(s)) return out;
   for(const b of s){
@@ -1247,35 +1108,52 @@ function tvResample(m1, ms){
   }
   return out;
 }
-function buildHTFfromM1(){
-  H1 = tvResample(M1, 3600000);
-  H4 = resample4h(H1);
-  M15 = tvResample(M1, 900000);
-  D1 = tvResample(M1, 86400000);
+/* Merge fetched bars into an existing HTF array, deduped by timestamp */
+function mergeArr(arr, bars){
+  const map = new Map(arr.map(b => [b.t, b]));
+  for(const b of bars) map.set(b.t, b);
+  return [...map.values()].sort((a, b) => a.t - b.t);
+}
+/* Engine needs M1 ticks plus real H1 depth for pools; D1 feeds PDH/PDL +
+   the daily-open target. Ready once M1 and H1 both have substance. */
+function tvCheckReady(){
+  if(tvReady) return;
+  if(M1.length > 500 && H1.length > 50){
+    if(!D1.length) D1 = tvResample(M1, 86400000);
+    H4 = resample4h(H1);
+    M15 = tvResample(M1, 900000);
+    tvReady = true;
+    recompute();
+    setFresh('live');
+  }
 }
 function tvHandleMsg(raw){
   let m;
   try { m = JSON.parse(raw); } catch(e){ return; }
   if(!m || typeof m.m !== 'string') return;
-  if(FEED !== 'tv') return;
   lastTVMsg = Date.now();
-  if(m.m === 'series_completed'){
-    if(!tvHTFbuilt && M1.length > 200){
-      tvHTFbuilt = true; buildHTFfromM1(); recompute(); setFresh('live');
-    }
-    return;
-  }
+  if(m.m === 'series_completed'){ tvCheckReady(); return; }
   if(m.m !== 'timescale_update' && m.m !== 'du') return;
   const data = m.p && m.p[1];
-  const bars = tvBarsFrom(data);
-  if(!bars.length) return;
-  mergeBars(bars);
-  if(!tvHTFbuilt){
-    if(M1.length > 1000){ tvHTFbuilt = true; buildHTFfromM1(); recompute(); setFresh('live'); }
-    else drawChart(Date.now());
-    return;
+  if(!data) return;
+  for(const sid of Object.keys(data)){
+    const key = Object.keys(tvSeriesIds).find(k => tvSeriesIds[k] === sid);
+    if(!key) continue;
+    const bars = tvBarsFrom(data[sid]);
+    if(!bars.length) continue;
+    if(key === 'm1'){
+      mergeBars(bars);
+      if(tvReady) onTick(bars[bars.length - 1]);
+      else drawChart(Date.now());
+    } else if(key === 'h1'){
+      H1 = mergeArr(H1, bars);
+      H4 = resample4h(H1);
+      if(M1.length) M15 = tvResample(M1, 900000);
+    } else if(key === 'd1'){
+      D1 = mergeArr(D1, bars);
+    }
   }
-  onTick(bars[bars.length - 1]);   // same light path as PAXG ticks
+  tvCheckReady();
 }
 function tvConnect(){
   try { tvws = new WebSocket(TV_WS_URLS[tvUrlIx % TV_WS_URLS.length]); }
@@ -1287,7 +1165,11 @@ function tvConnect(){
     tvws.send(tvFrame('chart_create_session', [tvSid, '']));
     tvws.send(tvFrame('resolve_symbol', [tvSid, symId,
       '{"symbol":"' + TV_SYMBOL + '","adjustment":"splits","session":"regular"}']));
-    tvws.send(tvFrame('create_series', [tvSid, tvSeries, 's1', symId, '1', 1500]));
+    for(const s of TV_SERIES){
+      const sid = 'sds_' + tvSid + '_' + s.key;
+      tvSeriesIds[s.key] = sid;
+      tvws.send(tvFrame('create_series', [tvSid, sid, 's1', symId, s.tf, s.n]));
+    }
   };
   tvws.onmessage = e => {
     if(typeof e.data !== 'string') return;
@@ -1295,104 +1177,28 @@ function tvConnect(){
   };
   const down = () => { try { tvws && tvws.close(); } catch(e2){} tvDown(); };
   tvws.onclose = down; tvws.onerror = down;
-  // safety net: if history never completes, build HTF from what arrived
-  setTimeout(() => {
-    if(FEED === 'tv' && !tvHTFbuilt && M1.length > 200){
-      tvHTFbuilt = true; buildHTFfromM1(); recompute(); setFresh('live');
-    }
-  }, 25000);
+  // safety net: if history stalls, mark ready from whatever arrived
+  setTimeout(() => { if(!tvReady && M1.length > 200) tvCheckReady(); }, 25000);
 }
+/* TV is the only feed: on failure keep retrying it (backoff capped at 30s),
+   never silently swap to a different price source. */
 function tvDown(){
-  if(FEED !== 'tv') return;
   tvFails++; tvUrlIx++;
   setFresh('reconnecting');
-  if(tvFails >= 3){
-    // TV test feed gave up — fall back to Yahoo, then PAXG, like any dead feed
-    FEED = 'paxg';
-    attemptYahooNow().then(async ok => { if(!ok) await switchToPaxg(); });
-    return;
-  }
-  setTimeout(() => { if(FEED === 'tv') tvConnect(); }, Math.min(15000, 2000 * tvFails));
+  setTimeout(tvConnect, Math.min(30000, 2000 * tvFails));
 }
 function tvResync(){
-  if(FEED !== 'tv') return;
   try { tvws && tvws.close(); } catch(e){}
   tvBuf = '';
   tvConnect();
 }
 function connectTV(){
-  stopFeeds();
-  FEED = 'tv'; tvFails = 0; tvBuf = ''; tvHTFbuilt = false;
+  try { tvws && tvws.close(); } catch(e){}
+  tvws = null; tvFails = 0; tvBuf = ''; tvReady = false; tvSeriesIds = {};
   tvSid = 'cs_' + Math.random().toString(36).slice(2, 10);
-  tvSeries = 'sds_' + Math.random().toString(36).slice(2, 8);
   applyFeedLabel();
   setFresh('connecting');
   tvConnect();
-}
-/* Halt every live feed (yahoo poll, paxg socket, tv socket) before switching */
-function stopFeeds(){
-  if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
-  if(yahooRetryTimer){ clearInterval(yahooRetryTimer); yahooRetryTimer = null; }
-  try { ws && ws.close(); } catch(e){}
-  try { tvws && tvws.close(); } catch(e){}
-  tvws = null;
-}
-async function paxgPollOnce(){
-  try {
-    const bars = await paxgKlines('1m', 3);
-    const last = M1[M1.length - 1];
-    const newest = bars[bars.length - 1];
-    if(newest.t > last.t){ mergeBars(bars); recompute(); }
-    else onTick(newest);
-    setFresh('live');
-  } catch(e){ setFresh('reconnecting'); }
-}
-/* Backfill any missed M1 range on the PAXG feed (an outage leaves a hole that
-   ticks alone never repair), then make sure the live socket is up. */
-async function paxgResync(){
-  try {
-    const lastT = M1.length ? M1[M1.length - 1].t : 0;
-    const gapMin = Math.ceil((Date.now() - lastT) / 60000);
-    if(gapMin > 2){
-      const bars = await paxgKlines('1m', Math.min(1000, gapMin + 2));
-      if(mergeBars(bars)) recompute();
-    }
-    if(!pollTimer){ try { ws.close(); } catch(e){} connectWS(); }
-    setFresh('live');
-  } catch(e){ setFresh('reconnecting'); }
-}
-/* Instant Yahoo resync (the 20s poll would backfill anyway, but not instantly) */
-async function yahooResync(){
-  try {
-    yahooFails = 0;
-    const bars = await yahooKlines('1m', '1d');
-    mergeBars(bars);
-    recompute();
-    setFresh('live');
-  } catch(e){ setFresh('reconnecting'); }
-}
-function schedulePoll(){
-  if(pollTimer) return;
-  setFresh('reconnecting');
-  pollTimer = setInterval(paxgPollOnce, 15000);
-  paxgPollOnce();
-}
-
-async function refreshHigherTFs(){
-  try {
-    if(FEED === 'yahoo'){
-      const h1 = await yahooKlines('1h', '1mo');
-      H1 = h1; H4 = resample4h(h1);
-      try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
-      try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
-    } else {
-      const [h1, h4] = await Promise.all([paxgKlines('1h', 500), paxgKlines('4h', 500)]);
-      H1 = h1; H4 = h4;
-      try { M15 = await paxgKlines('15m', 1500); } catch(e){}
-      try { D1 = await paxgKlines('1d', 1000); } catch(e){}
-    }
-    recompute();
-  } catch(e){}
 }
 
 /* ---- MT5-style crosshair + OHLC inspector (Mickey, 7 Oct 2026):
@@ -1610,85 +1416,34 @@ function exitReplay(){
 }
 
 async function boot(){
-  /* Primary: Yahoo XAUUSD spot (closest free match to Exness/OANDA).
-     Fallback: Binance PAXG (verified working). */
+  /* Feed: TradingView OANDA:XAUUSD only (Mickey's call, 8 Oct 2026) */
   // mobile: signal panel boots collapsed (slim verdict bar in the header) so
   // the small chart stays clear; tap to expand, auto-opens on a live signal
   if(isMobileView()) setCollapsed($('signalPanel'), true);
-  try {
-    const [m1, h1] = await Promise.all([
-      yahooKlines('1m', '1d'), yahooKlines('1h', '1mo')]);
-    if(m1.length < 30 || h1.length < 30) throw new Error('thin Yahoo data');
-    M1 = m1; H1 = h1; H4 = resample4h(h1);
-    try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
-    try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
-    FEED = 'yahoo';
-  } catch(e1){
-    try {
-      const [m1, h1, h4] = await Promise.all([
-        paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
-      M1 = m1; H1 = h1; H4 = h4;
-      try { M15 = await paxgKlines('15m', 1500); } catch(e){}
-      try { D1 = await paxgKlines('1d', 1000); } catch(e){}
-      FEED = 'paxg';
-    } catch(e2){
-      err('Could not reach any price feed. Check your connection and reload.');
-      $('vsub').textContent = 'feed unreachable';
-      return;
-    }
-  }
-  applyFeedLabel();
+  connectTV();   // loads M1+H1+D1 history, then streams live ticks
   viewCount = tfViewCount();   // readable candle width for this screen
-  recompute();
-  if(FEED === 'yahoo'){
-    setFresh('live');
-    pollTimer = setInterval(yahooPoll, 20000);
-  } else {
-    connectWS();
-  }
-  setInterval(refreshHigherTFs, 5 * 60 * 1000);
   setInterval(() => paintClock(Date.now()), 1000);  // session countdown clock
-  /* WS watchdog: silently-dead sockets (common on mobile) get force-reconnected,
-     with backfill so the dead minutes don't leave a hole in the chart */
+  /* TV watchdog: a silently-dead socket (common on mobile) gets force-reconnected */
   setInterval(() => {
-    if(FEED !== 'paxg' || pollTimer) return;
-    if(Date.now() - lastWSMsg > 60000) paxgResync();
-  }, 20000);
-  /* TV watchdog: same idea for the test feed — dead socket gets reconnected */
-  setInterval(() => {
-    if(FEED !== 'tv' || document.hidden) return;
+    if(document.hidden) return;
     if(Date.now() - lastTVMsg > 45000) tvResync();
   }, 20000);
-  document.addEventListener('visibilitychange', async () => {
+  document.addEventListener('visibilitychange', () => {
     if(document.hidden) return;
-    try {
-      if(FEED === 'yahoo'){
-        yahooFails = 0;
-        const bars = await yahooKlines('1m', '1d'); mergeBars(bars);
-        try { D1 = await yahooKlines('1d', '3mo'); } catch(e2){}
-      } else if(FEED === 'tv'){
-        tvResync();
-      } else {
-        await paxgResync();
-        try { D1 = await paxgKlines('1d', 90); } catch(e2){}
-      }
-      recompute();
-      setFresh('live');
-    } catch(e){ setFresh('reconnecting'); }
+    tvResync();   // fresh session on tab return (backfills missed candles)
   });
   /* Network drop / reconnect: show OFFLINE immediately, resync the instant
      the connection is back (backfills missed candles, restarts the socket) */
   window.addEventListener('offline', () => setFresh('offline'));
   window.addEventListener('online', () => {
     setFresh('reconnecting');
-    if(FEED === 'paxg') paxgResync(); else if(FEED === 'tv') tvResync(); else yahooResync();
+    tvResync();
   });
   window.addEventListener('resize', () => {
     if(!userZoomed) viewCount = tfViewCount();
     const [nowMs, m1c, h1c, h4c] = closedView();
     render(nowMs, m1c, h1c, h4c);
   });
-  $('symLabel').addEventListener('click', toggleFeed);
   $('poolTab').addEventListener('click', () => {
     const p = $('poolPanel'), t = $('poolTab');
     const open = p.classList.toggle('open');
