@@ -107,13 +107,6 @@
   #err{position:absolute;top:56px;left:50%;transform:translateX(-50%);z-index:30;
     background:rgba(60,20,20,.95);border:1px solid var(--red);border-radius:10px;
     padding:10px 16px;font-size:12px;display:none;max-width:92%}
-  #oandaPrompt{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:31;
-    background:rgba(10,14,20,.97);border:1px solid #f5c542;border-radius:12px;
-    padding:16px;font-size:13px;max-width:340px;width:92%;box-shadow:0 8px 40px rgba(0,0,0,.6)}
-  #oandaPrompt a{color:#f5c542}
-  #oandaPrompt button{background:#1a2230;border:1px solid var(--line);color:var(--txt);
-    border-radius:8px;padding:8px 12px;font-size:12px;cursor:pointer}
-  #oandaSave{border-color:#f5c542 !important;font-weight:700}
   /* bar replay (Mickey, 7 Oct 2026): floating control bar over the chart */
   #replayBar{position:absolute;left:50%;transform:translateX(-50%);bottom:34px;z-index:26;
     background:rgba(10,14,20,.94);border:1px solid #f5c542;border-radius:12px;
@@ -199,27 +192,6 @@
 <div id="stage">
   <div id="chartWrap"><canvas id="chart"></canvas></div>
   <div id="err"></div>
-  <!-- OANDA token prompt (8 Oct 2026): real OANDA XAU_USD via their free practice
-       API. The token is the user's own — pasted once per device, kept in
-       localStorage, never in the code or the repo. -->
-  <div id="oandaPrompt" style="display:none">
-    <div id="oandaMsg">Paste your OANDA demo API token to use the real OANDA feed.</div>
-    <div style="font-size:11px;color:var(--dim);margin:6px 0;line-height:1.5">
-      Free, 5 minutes, one time:<br>
-      1. Open a free demo account at
-      <a href="https://www.oanda.com/register/#/sign-up/demo" target="_blank" rel="noopener">oanda.com → demo</a><br>
-      2. Log in → your name → <b>Manage API Access</b> →
-      <a href="https://www.oanda.com/account/tpa/personal_token" target="_blank" rel="noopener">generate a personal token</a><br>
-      3. Paste it below — it stays in <b>this browser only</b>, never sent anywhere but OANDA.
-    </div>
-    <input id="oandaToken" type="password" placeholder="paste token here"
-      style="width:100%;box-sizing:border-box;background:#0a0e14;border:1px solid var(--line);
-      border-radius:8px;color:var(--txt);padding:8px 10px;font-size:12px;margin:4px 0" autocomplete="off">
-    <div style="display:flex;gap:8px;margin-top:6px">
-      <button id="oandaSave" style="flex:1">Use OANDA feed</button>
-      <button id="oandaCancel" style="flex:0 0 auto">Cancel</button>
-    </div>
-  </div>
   <!-- bar replay controls (Mickey, 7 Oct 2026): step through history candle by
        candle and watch each signal print exactly when it did live -->
   <div id="replayBar" style="display:none">
@@ -290,23 +262,26 @@
 /* Live client-side Liquidity Scalper.
  * FEED: Yahoo Finance XAUUSD=X (spot composite, tracks Exness/OANDA within ~$1)
  *       — REST history + 20s polling. No key, no account.
+ *       Fallback: Binance PAXGUSDT public feed (websocket tick-live). No key.
  *       Test opt-in: TradingView OANDA:XAUUSD via unofficial chart websocket
- *       (tap the top-bar label to switch Yahoo <-> TV). No login.
+ *       (tap the top-bar label to cycle feeds). No login.
  * ENGINE: engine.js — bit-for-bit port of the Python engine (verified 14/14
  *       identical signals on 5 test dates). Closed candles only, no repaint. */
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X';
+const PAXG_API = 'https://data-api.binance.vision';
+const PAXG_WS = 'wss://data-stream.binance.vision/ws/paxgusdt@kline_1m';
 const PKT = 'Asia/Karachi';
 const FRESH_MIN = 120;               // active-signal recency, like the Python engine
 
-let FEED = null;                     // 'yahoo' | 'oanda' | 'tv'
+let FEED = null;                     // 'yahoo' | 'paxg' | 'tv'
 let M1 = [], H1 = [], H4 = [], D1 = []; // M1 includes the forming candle last
 let pools = [], signalsToday = [];
 let swingSignalsToday = [];   // v2 sniper swing setups (HTF pool -> M1 reclaim)
 let chartTab = 'sniper';             // chart setup tab: sniper | adv | dqrs
                                     // SNIPER = live signal setup (untouched);
                                     // ADV = 4H+Daily majors; DQRS = daily reversal map
-let pollTimer = null, lastPrice = 0;
-let yahooFails = 0;
+let ws = null, wsFails = 0, pollTimer = null, lastPrice = 0;
+let yahooFails = 0, yahooRetryTimer = null, lastWSMsg = 0;
 
 /* ---- display timeframes: the engine always runs on M1; the chart can show
    M1 / M15 / H1 / H4 / 1D. M15 is aggregated live from the M1 store; H1/H4/1D
@@ -416,32 +391,39 @@ function resample4h(h1){
   }
   return out;
 }
+async function paxgKlines(interval, limit){
+  const r = await fetch(`${PAXG_API}/api/v3/klines?symbol=PAXGUSDT&interval=${interval}&limit=${limit}`);
+  if(!r.ok) throw new Error('PAXG HTTP ' + r.status);
+  return (await r.json()).map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] }));
+}
 function applyFeedLabel(){
-  if(FEED === 'tv'){
-    $('symLabel').innerHTML = 'TV · OANDA · ' + TF + ' <span style="opacity:.5">⇄</span>';
-    $('feedNote').textContent = 'TradingView OANDA:XAUUSD (TEST feed) · tap label to switch';
-  } else if(FEED === 'oanda'){
-    $('symLabel').innerHTML = 'OANDA · ' + TF + ' <span style="opacity:.5">⇄</span>';
-    $('feedNote').textContent = 'Real OANDA XAU_USD via your demo API token · tap label to switch';
-  } else {
+  if(FEED === 'yahoo'){
     $('symLabel').innerHTML = 'XAUUSD · ' + TF + ' <span style="opacity:.5">⇄</span>';
-    $('feedNote').textContent = 'XAUUSD spot via Yahoo Finance · tracks Exness/OANDA within ~$1 · tap label for OANDA';
+    $('feedNote').textContent = 'XAUUSD spot via Yahoo Finance · close to Exness/OANDA · tap label to switch';
+  } else if(FEED === 'tv'){
+    $('symLabel').innerHTML = 'TV · ' + TF + ' <span style="opacity:.5">⇄</span>';
+    $('feedNote').textContent = 'TradingView OANDA:XAUUSD (TEST feed) · tap label to switch';
+  } else {
+    $('symLabel').innerHTML = 'PAXG · ' + TF + ' ≈ XAUUSD <span style="opacity:.5">⇄</span>';
+    $('feedNote').textContent = 'PAXG feed (fallback) · tracks XAUUSD within a few $ · tap label to switch';
   }
 }
 
-/* Manual feed toggle (tap the top-bar label): Yahoo <-> TV */
+/* Manual feed toggle (tap the top-bar label): cycles Yahoo -> PAXG -> TV -> Yahoo */
 async function attemptYahooNow(){
-  if(FEED !== 'tv') return false;
+  if(FEED !== 'paxg' && FEED !== 'tv') return false;
   try {
     const m1 = await yahooKlines('1m', '1d');
     if(m1.length < 30) throw new Error('thin yahoo');
     const h1 = await yahooKlines('1h', '1mo');
+    if(yahooRetryTimer){ clearInterval(yahooRetryTimer); yahooRetryTimer = null; }
     if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+    try { ws.close(); } catch(e){}
     try { tvws && tvws.close(); } catch(e){}
     M1 = m1; H1 = h1; H4 = resample4h(h1);
     try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
     try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
-    FEED = 'yahoo'; yahooFails = 0;
+    FEED = 'yahoo'; wsFails = 0; yahooFails = 0;
     applyFeedLabel();
     recompute();
     setFresh('live');
@@ -449,17 +431,51 @@ async function attemptYahooNow(){
     return true;
   } catch(e){ return false; }
 }
-/* Manual feed toggle (tap the top-bar label): Yahoo -> OANDA -> TV -> Yahoo.
-   Also the recovery path when boot itself failed (FEED null). */
 function toggleFeed(){
-  if(FEED === 'tv'){
+  if(FEED === 'yahoo'){ switchToPaxg(); }
+  else if(FEED === 'paxg'){ connectTV(); }
+  else if(FEED === 'tv'){
     setFresh('connecting');
     attemptYahooNow().then(ok => { if(!ok) tvResync(); });
-  } else if(FEED === 'oanda'){
-    connectTV();
   } else {
-    connectOANDA();   // from Yahoo (or a failed boot) -> real OANDA prices
+    // boot failed (FEED null) — label stays tappable as a retry button
+    setFresh('connecting');
+    bootFeeds();
   }
+}
+/* Retry the feed attempt after a failed boot (called from the label tap).
+   On success, finishes boot; on failure, stays tappable for another try. */
+async function bootFeeds(){
+  try {
+    const [m1, h1] = await Promise.all([
+      yahooKlines('1m', '1d'), yahooKlines('1h', '1mo')]);
+    if(m1.length < 30 || h1.length < 30) throw new Error('thin Yahoo data');
+    M1 = m1; H1 = h1; H4 = resample4h(h1);
+    try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
+    try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
+    FEED = 'yahoo';
+  } catch(e1){
+    try {
+      const [m1, h1, h4] = await Promise.all([
+        paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
+      if(!m1.length) throw new Error('empty paxg');
+      M1 = m1; H1 = h1; H4 = h4;
+      try { M15 = await paxgKlines('15m', 1500); } catch(e){}
+      try { D1 = await paxgKlines('1d', 1000); } catch(e){}
+      FEED = 'paxg';
+    } catch(e2){
+      setFresh('reconnecting');
+      $('vsub').textContent = 'feed unreachable — tap the label to retry';
+      return false;
+    }
+  }
+  applyFeedLabel();
+  viewCount = tfViewCount();
+  recompute();
+  setFresh('live');
+  if(FEED === 'yahoo') pollTimer = setInterval(yahooPoll, 20000);
+  else connectWS();
+  return true;
 }
 
 /* Previous completed day's high/low (PDH/PDL) from daily bars — v2 sniper
@@ -1132,12 +1148,12 @@ function mergeBars(bars){
   let added = 0;
   for(const b of bars){ if(!map.has(b.t)){ map.set(b.t, b); added++; } else map.set(b.t, b); }
   const before = M1.length;
-  M1 = [...map.values()].sort((a, b) => a.t - b.t).slice(-5200);
+  M1 = [...map.values()].sort((a, b) => a.t - b.t).slice(-1600);
   return M1.length !== before || added > 0;
 }
 
 /* Yahoo path: 20s REST polling (no websocket on this feed).
-   6 consecutive failures -> stays on Yahoo, keeps retrying, says so. */
+   3 consecutive failures (or stale data) -> switch to PAXG automatically. */
 async function yahooPoll(){
   try {
     const bars = await yahooKlines('1m', '1d');
@@ -1154,20 +1170,72 @@ async function yahooPoll(){
   } catch(e){
     yahooFails++;
     console.warn('yahoo poll fail #' + yahooFails, e);
-    if(yahooFails >= 6){
-      // Yahoo down for ~2 min: say so, keep retrying in the background
-      setFresh('reconnecting');
-      return;
-    }
+    if(yahooFails >= 3){ switchToPaxg(); return; }
     setFresh('reconnecting');
   }
 }
 
+/* Full feed switch Yahoo -> PAXG (mid-session recovery, mirrors boot fallback) */
+async function switchToPaxg(){
+  if(FEED === 'paxg') return;
+  if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+  try { tvws && tvws.close(); } catch(e){}
+  try {
+    const [m1, h1, h4] = await Promise.all([
+      paxgKlines('1m', 1500), paxgKlines('1h', 500), paxgKlines('4h', 500)]);
+    if(!m1.length) throw new Error('empty paxg');
+    M1 = m1; H1 = h1; H4 = h4;
+    try { M15 = await paxgKlines('15m', 1500); } catch(e){}
+    try { D1 = await paxgKlines('1d', 1000); } catch(e){}
+    FEED = 'paxg'; yahooFails = 0; wsFails = 0;
+    applyFeedLabel();
+    recompute();
+    setFresh('live');
+    connectWS();
+    scheduleYahooRecovery();
+  } catch(e){
+    console.warn('paxg switch failed, retrying yahoo', e);
+    yahooFails = 0;
+    setFresh('reconnecting');
+    pollTimer = setInterval(yahooPoll, 20000);
+  }
+}
+
+/* While on PAXG, silently retry Yahoo every 5 min and switch back when healthy */
+function scheduleYahooRecovery(){
+  if(yahooRetryTimer) return;
+  yahooRetryTimer = setInterval(async () => {
+    if(FEED !== 'paxg'){ clearInterval(yahooRetryTimer); yahooRetryTimer = null; return; }
+    await attemptYahooNow();   /* stays on PAXG on failure, tries again in 5 min */
+  }, 5 * 60 * 1000);
+}
+
+/* PAXG fallback path: websocket ticks, REST poll if WS is blocked */
+function connectWS(){
+  setFresh(wsFails === 0 ? 'connecting' : 'reconnecting');
+  try { ws = new WebSocket(PAXG_WS); } catch(e){ schedulePoll(); return; }
+  ws.onopen = () => { wsFails = 0; lastWSMsg = Date.now(); setFresh('live'); };
+  ws.onmessage = e => {
+    lastWSMsg = Date.now();
+    try {
+      const k = JSON.parse(e.data).k;
+      if(k) onTick({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c });
+    } catch(e2){}
+  };
+  const down = () => {
+    try { ws.close(); } catch(e2){}
+    wsFails++;
+    if(wsFails >= 3){ schedulePoll(); return; }
+    setFresh('reconnecting');
+    setTimeout(connectWS, Math.min(30000, 2000 * wsFails));
+  };
+  ws.onclose = down; ws.onerror = down;
+}
 /* TradingView feed (TEST, 8 Oct 2026 — Mickey's request): OANDA:XAUUSD via
    TradingView's unofficial chart websocket (wss://data.tradingview.com).
    No login needed. Unofficial = can break or throttle without notice, so this
-   stays an OPT-IN test feed: tap the top-bar label to switch Yahoo <-> TV.
-   Yahoo remains the default working feed. */
+   stays an OPT-IN test feed: tap the top-bar label to cycle Yahoo -> PAXG -> TV.
+   Yahoo remains the default; PAXG remains the automatic fallback. */
 const TV_WS_URLS = ['wss://data.tradingview.com/socket.io/websocket',
                     'wss://prodata.tradingview.com/socket.io/websocket'];
 const TV_SYMBOL = 'OANDA:XAUUSD';          // closest to Exness on TradingView
@@ -1245,7 +1313,7 @@ function tvHandleMsg(raw){
     else drawChart(Date.now());
     return;
   }
-  onTick(bars[bars.length - 1]);   // live tick -> light update path
+  onTick(bars[bars.length - 1]);   // same light path as PAXG ticks
 }
 function tvConnect(){
   try { tvws = new WebSocket(TV_WS_URLS[tvUrlIx % TV_WS_URLS.length]); }
@@ -1277,8 +1345,9 @@ function tvDown(){
   tvFails++; tvUrlIx++;
   setFresh('reconnecting');
   if(tvFails >= 3){
-    // TV test feed gave up — fall back to Yahoo (the working feed)
-    attemptYahooNow();
+    // TV test feed gave up — fall back to Yahoo, then PAXG, like any dead feed
+    FEED = 'paxg';
+    attemptYahooNow().then(async ok => { if(!ok) await switchToPaxg(); });
     return;
   }
   setTimeout(() => { if(FEED === 'tv') tvConnect(); }, Math.min(15000, 2000 * tvFails));
@@ -1298,13 +1367,37 @@ function connectTV(){
   setFresh('connecting');
   tvConnect();
 }
-/* Halt the live feeds before switching (yahoo poll, tv socket) */
-/* Halt the live feeds before switching (yahoo poll, oanda poll, tv socket) */
+/* Halt every live feed (yahoo poll, paxg socket, tv socket) before switching */
 function stopFeeds(){
   if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
-  if(oandaTimer){ clearInterval(oandaTimer); oandaTimer = null; }
+  if(yahooRetryTimer){ clearInterval(yahooRetryTimer); yahooRetryTimer = null; }
+  try { ws && ws.close(); } catch(e){}
   try { tvws && tvws.close(); } catch(e){}
   tvws = null;
+}
+async function paxgPollOnce(){
+  try {
+    const bars = await paxgKlines('1m', 3);
+    const last = M1[M1.length - 1];
+    const newest = bars[bars.length - 1];
+    if(newest.t > last.t){ mergeBars(bars); recompute(); }
+    else onTick(newest);
+    setFresh('live');
+  } catch(e){ setFresh('reconnecting'); }
+}
+/* Backfill any missed M1 range on the PAXG feed (an outage leaves a hole that
+   ticks alone never repair), then make sure the live socket is up. */
+async function paxgResync(){
+  try {
+    const lastT = M1.length ? M1[M1.length - 1].t : 0;
+    const gapMin = Math.ceil((Date.now() - lastT) / 60000);
+    if(gapMin > 2){
+      const bars = await paxgKlines('1m', Math.min(1000, gapMin + 2));
+      if(mergeBars(bars)) recompute();
+    }
+    if(!pollTimer){ try { ws.close(); } catch(e){} connectWS(); }
+    setFresh('live');
+  } catch(e){ setFresh('reconnecting'); }
 }
 /* Instant Yahoo resync (the 20s poll would backfill anyway, but not instantly) */
 async function yahooResync(){
@@ -1316,113 +1409,14 @@ async function yahooResync(){
     setFresh('live');
   } catch(e){ setFresh('reconnecting'); }
 }
-
-/* ---------------- OANDA feed (Mickey, 8 Oct 2026): real OANDA XAU_USD via
-   their FREE practice API (api-fxpractice.oanda.com — verified reachable with
-   browser CORS allowed for our origin). The token is the user's own demo token:
-   pasted once per device into the prompt, kept in localStorage, never in the
-   code or the repo, sent only to OANDA. Practice quotes mirror live prices. */
-const OANDA_REST = 'https://api-fxpractice.oanda.com/v3';
-const OANDA_KEY = 'oanda_token';
-const oandaToken = () => (localStorage.getItem(OANDA_KEY) || '').trim();
-let oandaFails = 0, oandaTimer = null;
-
-async function oandaKlines(granularity, count){
-  const tok = oandaToken();
-  if(!tok) throw new Error('no OANDA token');
-  const r = await fetch(
-    `${OANDA_REST}/instruments/XAU_USD/candles?granularity=${granularity}&count=${count}&price=M`,
-    { headers: { 'Authorization': 'Bearer ' + tok } });
-  if(r.status === 401 || r.status === 403) throw new Error('bad OANDA token');
-  if(!r.ok) throw new Error('OANDA HTTP ' + r.status);
-  const j = await r.json();
-  const out = [];
-  for(const c of j.candles || []){
-    const m = c.mid;
-    if(!m || m.o == null || m.h == null || m.l == null || m.c == null) continue;
-    out.push({ t: Date.parse(c.time), o: +m.o, h: +m.h, l: +m.l, c: +m.c });
-  }
-  out.sort((a, b) => a.t - b.t);
-  return out;
-}
-/* Token prompt: shown when OANDA is chosen without a saved token, or when
-   the saved token gets rejected. Never blocks the Yahoo feed. */
-function showOandaPrompt(msg){
-  if(msg) $('oandaMsg').textContent = msg;
-  $('oandaPrompt').style.display = 'block';
-  setTimeout(() => $('oandaToken').focus(), 50);
-}
-function hideOandaPrompt(){ $('oandaPrompt').style.display = 'none'; $('oandaToken').value = ''; }
-function oandaTokenBad(){
-  localStorage.removeItem(OANDA_KEY);
-  showOandaPrompt("That token didn't work (OANDA said unauthorized). Generate a fresh one and paste it here.");
+function schedulePoll(){
+  if(pollTimer) return;
   setFresh('reconnecting');
+  pollTimer = setInterval(paxgPollOnce, 15000);
+  paxgPollOnce();
 }
-/* Live poll: newest M1 candles every 15s (same rhythm as the Yahoo feed) */
-async function oandaPoll(){
-  try {
-    const bars = await oandaKlines('M1', 5);
-    if(!bars.length) throw new Error('empty oanda poll');
-    const lastT = M1.length ? M1[M1.length - 1].t : 0;
-    const newest = bars[bars.length - 1];
-    mergeBars(bars);
-    if(newest.t > lastT){ oandaFails = 0; recompute(); }
-    else {
-      if((Date.now() - lastT) / 60000 > 4) throw new Error('stale oanda feed');
-      oandaFails = 0;
-      const [nowMs, m1c, h1c, h4c] = closedView(); render(nowMs, m1c, h1c, h4c);
-    }
-    setFresh('live');
-  } catch(e){
-    if(/bad OANDA token|no OANDA token/.test(e.message)){ oandaTokenBad(); return; }
-    oandaFails++;
-    console.warn('oanda poll fail #' + oandaFails, e);
-    setFresh('reconnecting');
-  }
-}
-async function oandaResync(){
-  try {
-    oandaFails = 0;
-    const bars = await oandaKlines('M1', 30); mergeBars(bars);
-    recompute();
-    setFresh('live');
-  } catch(e){
-    if(/bad OANDA token/.test(e.message)) oandaTokenBad();
-    else setFresh('reconnecting');
-  }
-}
-/* Switch to the OANDA feed. Returns true on success. quiet=true suppresses
-   the token prompt (used by boot when falling back to Yahoo silently). */
-async function connectOANDA(quiet){
-  if(!oandaToken()){
-    if(!quiet) showOandaPrompt();
-    return false;
-  }
-  stopFeeds();
-  setFresh('connecting');
-  try {
-    const [m1, h1, h4] = await Promise.all([
-      oandaKlines('M1', 5000), oandaKlines('H1', 2000), oandaKlines('H4', 1000)]);
-    if(m1.length < 30) throw new Error('thin oanda data');
-    M1 = m1; H1 = h1; H4 = h4;
-    try { M15 = await oandaKlines('M15', 2000); } catch(e){}
-    try { D1 = await oandaKlines('D', 500); } catch(e){}
-    FEED = 'oanda'; oandaFails = 0;
-    applyFeedLabel();
-    recompute();
-    setFresh('live');
-    oandaTimer = setInterval(oandaPoll, 15000);
-    return true;
-  } catch(e){
-    if(/bad OANDA token|no OANDA token/.test(e.message)){ if(!quiet) oandaTokenBad(); }
-    else if(!quiet){ err('OANDA feed failed: ' + e.message); }
-    setFresh('reconnecting');
-    return false;
-  }
-}
+
 async function refreshHigherTFs(){
-  // Yahoo + OANDA refresh native HTF; the TV feed resamples locally from M1
-  if(FEED !== 'yahoo' && FEED !== 'oanda') return;
   try {
     if(FEED === 'yahoo'){
       const h1 = await yahooKlines('1h', '1mo');
@@ -1430,10 +1424,10 @@ async function refreshHigherTFs(){
       try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
       try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
     } else {
-      const [h1, h4] = await Promise.all([oandaKlines('H1', 2000), oandaKlines('H4', 1000)]);
+      const [h1, h4] = await Promise.all([paxgKlines('1h', 500), paxgKlines('4h', 500)]);
       H1 = h1; H4 = h4;
-      try { M15 = await oandaKlines('M15', 2000); } catch(e){}
-      try { D1 = await oandaKlines('D', 500); } catch(e){}
+      try { M15 = await paxgKlines('15m', 1500); } catch(e){}
+      try { D1 = await paxgKlines('1d', 1000); } catch(e){}
     }
     recompute();
   } catch(e){}
@@ -1654,52 +1648,27 @@ function exitReplay(){
 }
 
 async function boot(){
-  /* Primary: real OANDA XAU_USD if the user saved a demo API token,
-     else Yahoo XAUUSD spot (closest free match to Exness/OANDA).
-     TV (OANDA) stays an opt-in test feed via the top-bar label. */
+  /* Primary: Yahoo XAUUSD spot (closest free match to Exness/OANDA).
+     Fallback: Binance PAXG (verified working). */
   // mobile: signal panel boots collapsed (slim verdict bar in the header) so
   // the small chart stays clear; tap to expand, auto-opens on a live signal
   if(isMobileView()) setCollapsed($('signalPanel'), true);
-  // feed label is always tappable (Yahoo -> OANDA -> TV), even if boot fails
+  // feed label is always tappable (Yahoo -> PAXG -> TV), even if boot fails
   $('symLabel').addEventListener('click', toggleFeed);
-  // OANDA token prompt buttons
-  $('oandaSave').addEventListener('click', () => {
-    const t = $('oandaToken').value.trim();
-    if(!t){ $('oandaMsg').textContent = 'Paste the token first — it\'s on OANDA under Manage API Access.'; return; }
-    localStorage.setItem(OANDA_KEY, t);
-    hideOandaPrompt();
-    connectOANDA();
-  });
-  $('oandaCancel').addEventListener('click', hideOandaPrompt);
-  $('oandaToken').addEventListener('keydown', e => { if(e.key === 'Enter') $('oandaSave').click(); });
-  let booted = false;
-  if(oandaToken()) booted = await connectOANDA(true);   // quiet: no prompt on failure
-  if(!booted){
-    try {
-      const [m1, h1] = await Promise.all([
-        yahooKlines('1m', '1d'), yahooKlines('1h', '1mo')]);
-      if(m1.length < 30 || h1.length < 30) throw new Error('thin Yahoo data');
-      M1 = m1; H1 = h1; H4 = resample4h(h1);
-      try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
-      try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
-      FEED = 'yahoo';
-      booted = true;
-    } catch(e1){ booted = false; }
-  }
-  if(!booted){
-    err('Could not reach any price feed. Check your connection and reload — or tap the top-bar label to try another feed.');
-    $('vsub').textContent = 'feed unreachable — tap the label to try another feed';
+  const ok = await bootFeeds();
+  if(!ok){
+    err('Could not reach any price feed. Check your connection — or tap the top-bar label to retry.');
     return;
   }
-  applyFeedLabel();
-  viewCount = tfViewCount();   // readable candle width for this screen
-  recompute();
-  setFresh('live');
-  if(FEED === 'yahoo') pollTimer = setInterval(yahooPoll, 20000);
-  // (OANDA started its own 15s poll inside connectOANDA; TV connects on demand)
   setInterval(refreshHigherTFs, 5 * 60 * 1000);
   setInterval(() => paintClock(Date.now()), 1000);  // session countdown clock
-  /* TV watchdog: a silently-dead TV socket (common on mobile) gets reconnected */
+  /* WS watchdog: silently-dead sockets (common on mobile) get force-reconnected,
+     with backfill so the dead minutes don't leave a hole in the chart */
+  setInterval(() => {
+    if(FEED !== 'paxg' || pollTimer) return;
+    if(Date.now() - lastWSMsg > 60000) paxgResync();
+  }, 20000);
+  /* TV watchdog: same idea for the test feed — dead socket gets reconnected */
   setInterval(() => {
     if(FEED !== 'tv' || document.hidden) return;
     if(Date.now() - lastTVMsg > 45000) tvResync();
@@ -1713,8 +1682,9 @@ async function boot(){
         try { D1 = await yahooKlines('1d', '3mo'); } catch(e2){}
       } else if(FEED === 'tv'){
         tvResync();
-      } else if(FEED === 'oanda'){
-        await oandaResync();
+      } else {
+        await paxgResync();
+        try { D1 = await paxgKlines('1d', 90); } catch(e2){}
       }
       recompute();
       setFresh('live');
@@ -1725,9 +1695,7 @@ async function boot(){
   window.addEventListener('offline', () => setFresh('offline'));
   window.addEventListener('online', () => {
     setFresh('reconnecting');
-    if(FEED === 'tv') tvResync();
-    else if(FEED === 'oanda') oandaResync();
-    else yahooResync();
+    if(FEED === 'paxg') paxgResync(); else if(FEED === 'tv') tvResync(); else yahooResync();
   });
   window.addEventListener('resize', () => {
     if(!userZoomed) viewCount = tfViewCount();
