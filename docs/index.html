@@ -202,6 +202,7 @@
 </div>
 <div id="tfbar">
   <button class="tf active" data-tf="M1">M1</button>
+  <button class="tf" data-tf="M5">M5</button>
   <button class="tf" data-tf="M15">M15</button>
   <button class="tf" data-tf="H1">H1</button>
   <button class="tf" data-tf="H4">H4</button>
@@ -277,7 +278,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=13"></script>
+<script src="engine.js?v=14"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -300,14 +301,19 @@ let FEED = null;                     // 'yahoo' | 'paxg' | 'tv'
 let M1 = [], H1 = [], H4 = [], D1 = []; // M1 includes the forming candle last
 let pools = [], signalsToday = [];
 let swingSignalsToday = [];   // v2 sniper swing setups (HTF pool -> M1 reclaim)
-// WICK experimental paper tabs (Mickey, 11 Oct 2026): 15m wick-rejection
+// WICK experimental paper tabs (Mickey, 11 Oct 2026): wick-rejection
 // strategies, observe-only. Backtests negative — never tradeable.
-let wick03Sigs = [], wick04Sigs = [];
-let wickEma = new Map();      // 15m bar t -> EMA200 (for the chart line)
-const WICK_BANNER_03 = '<b>🧪 EXPERIMENTAL</b> — 90-day backtest: 45.5% win rate, −0.29R/trade · <b>VERDICT: negative</b> — observe only, do NOT trade live · vol filter OFF (no volume on Yahoo feed)';
+// wick03 tracks M1/M5/M15 separately (per-TF tallies, never mixed);
+// wick04 is 15m-only.
+let wick03Sigs = { M1: [], M5: [], M15: [] }, wick04Sigs = [];
+let wickEma = { M1: new Map(), M5: new Map(), M15: new Map() };  // per-TF: bar t -> EMA200
+const WICK_BANNER_03 = '<b>🧪 EXPERIMENTAL</b> — 90-day backtest (15m): 45.5% win rate, −0.29R/trade · <b>VERDICT: negative</b> — observe only, do NOT trade live · vol filter OFF (no volume on Yahoo feed) · M1/M5 untested (BTC 1m backtest ran −4.03R/trade — lower TFs bleed faster)';
 const WICK_BANNER_04 = '<b>🧪 EXPERIMENTAL</b> — 90-day backtest: 53.2% win rate, −0.13R/trade · <b>VERDICT: negative</b> — observe only, do NOT trade live · vol filter OFF (no volume on Yahoo feed)';
 const wickMode = () => chartTab === 'wick03' || chartTab === 'wick04';
-const wickSigs = () => chartTab === 'wick03' ? wick03Sigs : wick04Sigs;
+// TF the wick tab actually runs on (wick04 always M15; wick03 follows the TF bar)
+const wickTF = () => chartTab === 'wick03' ? (WICK03_TFS.includes(TF) ? TF : 'M15') : 'M15';
+const wickSigs = () => chartTab === 'wick03' ? wick03Sigs[wickTF()] : wick04Sigs;
+const wickEmaMap = () => wickEma[wickTF()];
 function wickActive(){
   // latest open test signal; if none open, the most recently closed one
   const sigs = wickSigs().slice().sort((a, b) => Date.parse(b.signal_at) - Date.parse(a.signal_at));
@@ -329,12 +335,13 @@ let yahooFails = 0, yahooRetryTimer = null, lastWSMsg = 0;
    M1 / M15 / H1 / H4 / 1D. M15 is aggregated live from the M1 store; H1/H4/1D
    use the native higher-TF stores (already fetched for the engine) with the
    forming bar patched live from the latest tick. ---- */
-const TFS = ['M1','M15','H1','H4','D1'];
-const TF_MS = { M1:60000, M15:900000, H1:3600000, H4:14400000, D1:86400000 };
+const TFS = ['M1','M5','M15','H1','H4','D1'];
+const TF_MS = { M1:60000, M5:300000, M15:900000, H1:3600000, H4:14400000, D1:86400000 };
 let TF = 'M1';
 let M15 = [];
+let M5 = [];   // native 5m store (mirrors the M15 fetch sites); wick03 runs M1/M5/M15
 function tfBars(){
-  return TF === 'M1' ? M1 : TF === 'M15' ? M15 : TF === 'H1' ? H1 : TF === 'H4' ? H4 : D1;
+  return TF === 'M1' ? M1 : TF === 'M5' ? M5 : TF === 'M15' ? M15 : TF === 'H1' ? H1 : TF === 'H4' ? H4 : D1;
 }
 /* M15 is a native store (deep history, like H1/H4/D1) — the engine never
    uses it, it's display only. patchForming rolls it forward + patches the
@@ -345,11 +352,14 @@ function patchForming(){
   const nowMs = Date.now();
   const px = M1.length ? M1[M1.length-1].c : null;
   if(px == null) return;
-  // roll the native M15 store forward so new 15m bars appear between fetches
+  // roll the native M15/M5 stores forward so new bars appear between fetches
   const m15ms = TF_MS.M15, key15 = Math.floor(nowMs / m15ms) * m15ms;
   const l15 = M15[M15.length - 1];
   if(l15 && key15 > l15.t) M15.push({ t: key15, o: px, h: px, l: px, c: px });
-  const pairs = [[M15, m15ms], [H1, TF_MS.H1], [H4, TF_MS.H4], [D1, TF_MS.D1]];
+  const m5ms = TF_MS.M5, key5 = Math.floor(nowMs / m5ms) * m5ms;
+  const l5 = M5[M5.length - 1];
+  if(l5 && key5 > l5.t) M5.push({ t: key5, o: px, h: px, l: px, c: px });
+  const pairs = [[M5, m5ms], [M15, m15ms], [H1, TF_MS.H1], [H4, TF_MS.H4], [D1, TF_MS.D1]];
   for(const [store, ms] of pairs){
     const b = store[store.length - 1];
     if(b && nowMs >= b.t && nowMs < b.t + ms){
@@ -384,16 +394,22 @@ function tfViewCount(){
    (backtested on 15m) — their other TF buttons lock, with an on-bar note. */
 const LS_TF_KEY = v => 'liqscalp_tf_' + v;
 function persistTF(){ try{ localStorage.setItem(LS_TF_KEY(chartTab), TF); }catch(e){} }
+/* Wick TF policy (11 Oct 2026, Mickey's "add 5m + 1m on WICK 0.3"):
+   wick03 runs M1/M5/M15 (backtested 15m; M1/M5 untested), wick04 stays 15m-only. */
+const WICK03_TFS = ['M1','M5','M15'];
 function updateTfLock(){
-  const locked = wickMode();
-  $('tfbar').classList.toggle('locked', locked);
+  const w03 = chartTab === 'wick03', w04 = chartTab === 'wick04';
+  $('tfbar').classList.toggle('locked', w03 || w04);
+  if (w03 || w04) $('tfnote').textContent = w04 ? 'WICK runs on 15m only' : 'WICK 0.3: M1/M5/M15';
   document.querySelectorAll('#tfbar .tf').forEach(b => {
-    b.disabled = locked && b.dataset.tf !== 'M15';
+    const t = b.dataset.tf;
+    b.disabled = w04 ? t !== 'M15' : w03 ? !WICK03_TFS.includes(t) : false;
   });
 }
 function setTF(tf){
   if(!TFS.includes(tf) || tf === TF) return;
-  if(wickMode() && tf !== 'M15') return;   // wick tabs: 15m only, never silently mis-switch
+  if(chartTab === 'wick04' && tf !== 'M15') return;   // wick04: 15m only
+  if(chartTab === 'wick03' && !WICK03_TFS.includes(tf)) return;  // wick03: M1/M5/M15
   TF = tf;
   viewOffset = 0; priceShift = 0; priceZoom = 1; zoomPrice = null;   // re-anchor to the live edge on switch
   viewCount = tfViewCount(); userZoomed = false;  // readable default zoom per timeframe
@@ -478,6 +494,7 @@ async function attemptYahooNow(){
     try { tvws && tvws.close(); } catch(e){}
     M1 = m1; H1 = h1; H4 = resample4h(h1);
     try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
+    try { M5 = await yahooKlines('5m', '1mo'); } catch(e){}
     try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
     FEED = 'yahoo'; wsFails = 0; yahooFails = 0;
     applyFeedLabel();
@@ -508,6 +525,7 @@ async function bootFeeds(){
     if(m1.length < 30 || h1.length < 30) throw new Error('thin Yahoo data');
     M1 = m1; H1 = h1; H4 = resample4h(h1);
     try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
+    try { M5 = await yahooKlines('5m', '1mo'); } catch(e){}
     try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
     FEED = 'yahoo';
   } catch(e1){
@@ -517,6 +535,7 @@ async function bootFeeds(){
       if(!m1.length) throw new Error('empty paxg');
       M1 = m1; H1 = h1; H4 = h4;
       try { M15 = await paxgKlines('15m', 1500); } catch(e){}
+      try { M5 = await paxgKlines('5m', 1500); } catch(e){}
       try { D1 = await paxgKlines('1d', 1000); } catch(e){}
       FEED = 'paxg';
     } catch(e2){
@@ -568,16 +587,16 @@ const RP_SPEEDS = [700, 350, 150];
 let rpTimer = null, rpSpeedIdx = 0;
 function recompute(){
   const rp = replay !== null;
-  const saved = rp ? { M1, H1, H4, M15, D1 } : null;
+  const saved = rp ? { M1, H1, H4, M5, M15, D1 } : null;
   if(rp){
     const t = saved.M1[replay.head].t + 60000;
     const cut = a => a.filter(k => k.t < t);
     M1 = cut(saved.M1); H1 = cut(saved.H1); H4 = cut(saved.H4);
-    M15 = cut(saved.M15); D1 = cut(saved.D1);
+    M5 = cut(saved.M5); M15 = cut(saved.M15); D1 = cut(saved.D1);
   }
   const nowMs = rp ? saved.M1[replay.head].t + 60000 : Date.now();
   if(M1.length < 10 || H1.length < 10 || H4.length < 10){
-    if(saved) ({ M1, H1, H4, M15, D1 } = saved);
+    if(saved) ({ M1, H1, H4, M5, M15, D1 } = saved);
     return;
   }
   const m1c = LS.closed_only(M1, nowMs);
@@ -609,28 +628,37 @@ function recompute(){
                           : Object.assign({}, s, { outcome: null, r: null });
     });
   }
-  // WICK experimental tabs (Mickey, 11 Oct 2026): 15m wick-rejection paper
-  // strategies, observe-only. Signals expire after 5h (20 x 15m) via
-  // track_outcome's maxHoldHours. One position at a time per strategy
-  // (the Pine `position_size == 0` gate), tracked independently per tab.
+  // WICK experimental tabs (Mickey, 11 Oct 2026): wick-rejection paper
+  // strategies, observe-only. Signals expire after 5h (time-based) via
+  // track_outcome's maxHoldHours. One position at a time per strategy+TF
+  // (the Pine `position_size == 0` gate). wick03 runs M1/M5/M15 with
+  // SEPARATE per-TF signal lists + tallies (never mixed); wick04 stays 15m.
   {
-    const m15c = LS.closed_only(M15, nowMs);
-    const withOc = arr => arr.map(s => {
-      const after = m15c.filter(b => b.t > Date.parse(s.signal_at));
+    const barsFor = tf => LS.closed_only(tf === 'M1' ? M1 : tf === 'M5' ? M5 : M15, nowMs);
+    const withOc = (arr, bars) => arr.map(s => {
+      const after = bars.filter(b => b.t > Date.parse(s.signal_at));
       return after.length ? Object.assign({}, s, LS.track_outcome(s, after, 5))
                           : Object.assign({}, s, { outcome: null, r: null });
     });
-    const w03 = withOc(LS.build_wick_signals(m15c, false));
-    const w04 = withOc(LS.build_wick_signals(m15c, true));
-    const k03 = new Set(LS.suppress_overlapping(w03));
-    const k04 = new Set(LS.suppress_overlapping(w04));
-    wick03Sigs = w03.filter(s => k03.has(s));
-    wick04Sigs = w04.filter(s => k04.has(s));
-    wickEma = new Map();
-    if (m15c.length > 200) {
-      const ea = LS.ema_series(m15c.map(b => b.c), 200);
-      m15c.forEach((b, i) => { if (ea[i] != null) wickEma.set(b.t, ea[i]); });
+    const emaMap = bars => {
+      const m = new Map();
+      if (bars.length > 200) {
+        const ea = LS.ema_series(bars.map(b => b.c), 200);
+        bars.forEach((b, i) => { if (ea[i] != null) m.set(b.t, ea[i]); });
+      }
+      return m;
+    };
+    for (const tf of WICK03_TFS) {
+      const bc = barsFor(tf);
+      const w03 = withOc(LS.build_wick_signals(bc, false), bc);
+      const k03 = new Set(LS.suppress_overlapping(w03));
+      wick03Sigs[tf] = w03.filter(s => k03.has(s)).map(s => Object.assign({}, s, { tf }));
+      wickEma[tf] = emaMap(bc);
     }
+    const m15c = barsFor('M15');
+    const w04 = withOc(LS.build_wick_signals(m15c, true), m15c);
+    const k04 = new Set(LS.suppress_overlapping(w04));
+    wick04Sigs = w04.filter(s => k04.has(s));
   }
   // one open trade at a time (7 Oct 2026): while a signal is still running,
   // later signals are suppressed — no overlapping positions, no stacks of
@@ -652,7 +680,7 @@ function recompute(){
   if(justResolved) flashSig = justResolved;
   prevOutcomes = cur;
   render(nowMs, m1c, h1c, h4c);
-  if(saved) ({ M1, H1, H4, M15, D1 } = saved);   // restore full stores after replay compute
+  if(saved) ({ M1, H1, H4, M5, M15, D1 } = saved);   // restore full stores after replay compute
 }
 
 function activeSignal(nowMs){
@@ -852,10 +880,11 @@ function render(nowMs, m1c, h1c, h4c){
 function renderWickPanels(nowMs){
   const sigs = wickSigs();
   const act = wickActive();
+  const wtf = wickTF();   // the TF this wick tab is actually running on
   const tag = chartTab === 'wick03' ? 'WICK 0.3' : 'WICK 0.4';
   const t = wickTally(sigs);
   const netC = t.net >= 0 ? 'var(--green)' : 'var(--red)';
-  const tallyHtml = `📝 paper (loaded 15m history) · ${t.n} sig · <span class="win">${t.wins}W</span>/<span class="loss">${t.losses}L</span> · net <b style="color:${netC}">${t.net >= 0 ? '+' : ''}${t.net}R</b>`;
+  const tallyHtml = `📝 paper <b>${wtf}</b> · loaded history · ${t.n} sig · <span class="win">${t.wins}W</span>/<span class="loss">${t.losses}L</span> · net <b style="color:${netC}">${t.net >= 0 ? '+' : ''}${t.net}R</b>`;
   const sp = $('signalPanel'), plan = $('plan');
   const logH2 = document.querySelector('#logPanel h2');
   if (logH2 && logH2.firstChild) logH2.firstChild.textContent = 'Wick test log ';
@@ -869,7 +898,7 @@ function renderWickPanels(nowMs){
     $('pTP').textContent = act.tp.toFixed(2);
     $('pRR').textContent = '1:' + act.rr.toFixed(2);
     $('tp2row').style.display = 'none'; $('tp3row').style.display = 'none';
-    $('vsub').textContent = tag + ' · ' + act.direction + ' · signal ' + fmtT(Date.parse(act.signal_at)) + ' PKT · OBSERVE ONLY';
+    $('vsub').textContent = tag + ' · ' + wtf + ' · ' + act.direction + ' · signal ' + fmtT(Date.parse(act.signal_at)) + ' PKT · OBSERVE ONLY';
     $('reason').textContent = '🧪 ' + act.reason;
   } else if (act) {
     const won = act.outcome && act.outcome.startsWith('TP');
@@ -879,7 +908,7 @@ function renderWickPanels(nowMs){
     $('vtext').textContent = lbl;
     setVmini(lbl, won ? 'var(--green)' : act.outcome === 'SL' ? 'var(--red)' : 'var(--dim)');
     plan.style.display = 'none';
-    $('vsub').textContent = tag + ' · ' + act.direction + ' · ' + fmtT(Date.parse(act.signal_at)) + ' PKT · OBSERVE ONLY';
+    $('vsub').textContent = tag + ' · ' + wtf + ' · ' + act.direction + ' · ' + fmtT(Date.parse(act.signal_at)) + ' PKT · OBSERVE ONLY';
     const rc = won ? 'var(--green)' : act.outcome === 'SL' ? 'var(--red)' : 'var(--dim)';
     $('reason').innerHTML = `entry ${act.entry.toFixed(2)} · SL ${act.sl.toFixed(2)} · TP ${act.tp.toFixed(2)} → <b style="color:${rc}">${act.r > 0 ? '+' : ''}${act.r}R</b> · ${act.outcome}`;
   } else {
@@ -887,16 +916,16 @@ function renderWickPanels(nowMs){
     setPanelClass(sp, 'wicktest WAIT');
     $('vtext').textContent = 'TEST WAIT';
     setVmini('TEST WAIT', 'var(--dim)');
-    $('vsub').textContent = tag + ' · no open test signal · OBSERVE ONLY';
-    $('reason').textContent = '⏳ Waiting for a 50%+ wick rejection vs EMA200 on 15m (no repaint — prints at candle close) · signals expire after 5h';
+    $('vsub').textContent = tag + ' · ' + wtf + ' · no open test signal · OBSERVE ONLY';
+    $('reason').textContent = `⏳ Waiting for a 50%+ wick rejection vs EMA200 on ${wtf} (no repaint — prints at candle close) · signals expire after 5h`;
   }
   $('ctx').innerHTML = tallyHtml;
-  // trend badge: price vs the strategy's own EMA200 filter
-  const m15c = LS.closed_only(M15, nowMs);
+  // trend badge: price vs the strategy's own EMA200 filter (on the wick tab's TF)
+  const wbars = LS.closed_only(wtf === 'M1' ? M1 : wtf === 'M5' ? M5 : M15, nowMs);
   const tb = $('trend');
-  if (m15c.length > 200) {
-    const ea = LS.ema_series(m15c.map(b => b.c), 200);
-    const e = ea[ea.length - 1], px = m15c[m15c.length - 1].c;
+  if (wbars.length > 200) {
+    const ea = LS.ema_series(wbars.map(b => b.c), 200);
+    const e = ea[ea.length - 1], px = wbars[wbars.length - 1].c;
     const up = px > e;
     tb.textContent = (up ? '↗' : '↘') + ' EMA200';
     tb.className = 'badge' + (up ? ' up' : ' dn');
@@ -910,9 +939,9 @@ function renderWickPanels(nowMs){
     const oc = x.outcome
       ? `<span class="${won ? 'win' : 'loss'}">${x.outcome} ${x.r > 0 ? '+' : ''}${x.r}R</span>`
       : '<span style="color:var(--dim)">open</span>';
-    return `<tr><td>${fmtT(Date.parse(x.signal_at))}</td><td class="${x.direction}">${ktag}${x.direction}</td>`
+    return `<tr><td>${fmtT(Date.parse(x.signal_at))} <span class="tag">${x.tf || wtf}</span></td><td class="${x.direction}">${ktag}${x.direction}</td>`
       + `<td>${x.entry.toFixed(2)}</td><td>1:${x.rr.toFixed(2)}</td><td>${oc}</td></tr>`;
-  }).join('') : '<tr><td colspan="5" class="empty">no 15m wick signals in loaded history — strict filter, this is normal</td></tr>';
+  }).join('') : `<tr><td colspan="5" class="empty">no ${wtf} wick signals in loaded history — strict filter, this is normal</td></tr>`;
   // price + freshness line (sniper-only extras like pool panel stay untouched)
   const price = M1.length ? M1[M1.length - 1].c : 0;
   const pe = $('price');
@@ -984,11 +1013,11 @@ function drawChart(nowMs){
       [act.entry, act.sl, act.tp, act.tp2, act.tp3].forEach(v => { if(v != null) consider(v); });
     }
     allSig.forEach(s => { if(s.entry != null) consider(s.entry); });
-    // wick tabs: keep the 200 EMA inside the vertical range
-    if (wickMode) for (const k of candles) {
-      const ev = wickEma.get(k.t);
+    // wick tabs: keep the 200 EMA inside the vertical range (per-TF map)
+    if (wickMode) { const wem = wickEmaMap(); for (const k of candles) {
+      const ev = wem.get(k.t);
       if (ev != null) consider(ev);
-    }
+    } }
   }
   if(!isFinite(lo)){ lo = 4100; hi = 4200; }
   const pad = ((hi - lo) * 0.10) || 1;
@@ -1192,13 +1221,15 @@ function drawChart(nowMs){
     }
   }
   } // end !levelMode — signal markers
-  // WICK tabs: 200 EMA (blue, like the Pine plot) — the strategy's trend filter
-  if (wickMode && wickEma.size){
+  // WICK tabs: 200 EMA (blue, like the Pine plot) — the strategy's trend filter,
+  // drawn from the per-TF map so M1/M5/M15 each get their own line
+  const wickEmaCur = wickMode ? wickEmaMap() : null;
+  if (wickMode && wickEmaCur && wickEmaCur.size){
     c.strokeStyle = '#3b82f6'; c.lineWidth = 1.6;
     c.beginPath();
     let started = false;
     for (let i = 0; i < n; i++){
-      const ev = wickEma.get(candles[i].t);
+      const ev = wickEmaCur.get(candles[i].t);
       if (ev == null || ev < lo || ev > hi) { started = false; continue; }
       const x = i * cw + cw / 2, yy = y(ev);
       if (!started) { c.moveTo(x, yy); started = true; } else c.lineTo(x, yy);
@@ -1206,7 +1237,7 @@ function drawChart(nowMs){
     c.stroke(); c.lineWidth = 1;
     // tag the EMA value at the right edge
     for (let i = n - 1; i >= 0; i--){
-      const ev = wickEma.get(candles[i].t);
+      const ev = wickEmaCur.get(candles[i].t);
       if (ev != null && ev >= lo && ev <= hi){
         const yy = Math.round(y(ev)) + .5;
         c.font = '700 10px system-ui';
@@ -1395,6 +1426,7 @@ async function switchToPaxg(){
     if(!m1.length) throw new Error('empty paxg');
     M1 = m1; H1 = h1; H4 = h4;
     try { M15 = await paxgKlines('15m', 1500); } catch(e){}
+      try { M5 = await paxgKlines('5m', 1500); } catch(e){}
     try { D1 = await paxgKlines('1d', 1000); } catch(e){}
     FEED = 'paxg'; yahooFails = 0; wsFails = 0;
     applyFeedLabel();
@@ -1498,6 +1530,7 @@ function buildHTFfromM1(){
   H1 = tvResample(M1, 3600000);
   H4 = resample4h(H1);
   M15 = tvResample(M1, 900000);
+  M5 = tvResample(M1, 300000);
   D1 = tvResample(M1, 86400000);
 }
 function tvHandleMsg(raw){
@@ -1632,11 +1665,13 @@ async function refreshHigherTFs(){
       const h1 = await yahooKlines('1h', '1mo');
       H1 = h1; H4 = resample4h(h1);
       try { M15 = await yahooKlines('15m', '1mo'); } catch(e){}
+    try { M5 = await yahooKlines('5m', '1mo'); } catch(e){}
       try { D1 = await yahooKlines('1d', '1y'); } catch(e){}
     } else {
       const [h1, h4] = await Promise.all([paxgKlines('1h', 500), paxgKlines('4h', 500)]);
       H1 = h1; H4 = h4;
       try { M15 = await paxgKlines('15m', 1500); } catch(e){}
+      try { M5 = await paxgKlines('5m', 1500); } catch(e){}
       try { D1 = await paxgKlines('1d', 1000); } catch(e){}
     }
     recompute();
@@ -1878,7 +1913,11 @@ async function boot(){
       document.querySelectorAll('.viewtab').forEach(x =>
         x.classList.toggle('active', x.dataset.view === lt));
     }
-    if(wickMode()) TF = 'M15';   // wick tabs are 15m-only, always
+    if(chartTab === 'wick04') TF = 'M15';   // wick04 is 15m-only, always
+    else if(chartTab === 'wick03'){
+      const ltf = localStorage.getItem(LS_TF_KEY('wick03'));
+      TF = (ltf && WICK03_TFS.includes(ltf)) ? ltf : 'M15';
+    }
     else {
       const ltf = localStorage.getItem(LS_TF_KEY(chartTab));
       if(ltf && TFS.includes(ltf)) TF = ltf;
@@ -1953,9 +1992,15 @@ async function boot(){
         x.classList.toggle('active', x === b));
       try{ localStorage.setItem('liqscalp_tab', chartTab); }catch(e){}
       updateTfLock();
-      // wick strategies run on 15m — park the chart there on tab select.
-      // other tabs restore their own remembered TF (11 Oct 2026).
-      if (wickMode()) setTF('M15');
+      // wick04 is 15m-only — park it there. wick03 restores its own remembered
+      // TF (M1/M5/M15); other tabs restore theirs (11 Oct 2026).
+      if (chartTab === 'wick04') setTF('M15');
+      else if (chartTab === 'wick03') {
+        let rtf = null;
+        try{ rtf = localStorage.getItem(LS_TF_KEY('wick03')); }catch(e){}
+        if (rtf && WICK03_TFS.includes(rtf) && rtf !== TF) setTF(rtf);
+        else if (!WICK03_TFS.includes(TF)) setTF('M15');
+      }
       else {
         let rtf = null;
         try{ rtf = localStorage.getItem(LS_TF_KEY(chartTab)); }catch(e){}
