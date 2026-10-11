@@ -66,6 +66,12 @@
     padding:4px 0;cursor:pointer;font:inherit;font-size:11px;color:var(--dim)}
   button.tf.active{border-color:var(--gold);color:var(--gold);font-weight:700}
   button.tf:active{transform:scale(.96)}
+  /* WICK TF lock (11 Oct 2026): wick strategies are 15m-only — other TFs are
+     visibly disabled on wick tabs instead of silently misbehaving */
+  button.tf:disabled{opacity:.28;cursor:not-allowed;transform:none}
+  #tfnote{display:none;font-size:10px;color:#f5a623;align-self:center;
+    white-space:nowrap;padding-left:4px}
+  #tfbar.locked #tfnote{display:inline}
   #rulesPanel{right:10px;bottom:10px;width:252px;max-height:56%;overflow-y:auto;display:none;
     border-color:#7a5b12}
   #rulesPanel.open{display:block}
@@ -200,6 +206,7 @@
   <button class="tf" data-tf="H1">H1</button>
   <button class="tf" data-tf="H4">H4</button>
   <button class="tf" data-tf="D1">1D</button>
+  <span id="tfnote">WICK runs on 15m only</span>
 </div>
 <!-- WICK experimental banner (11 Oct 2026): always visible on wick tabs —
      backtests were negative, these are observe-only paper signals -->
@@ -270,7 +277,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=12"></script>
+<script src="engine.js?v=13"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -372,14 +379,28 @@ function tfViewCount(){
   if(n <= 28) return n;
   return Math.min(defaultViewCount(), n - 8);
 }
+/* TF memory (11 Oct 2026, Mickey's "refresh resets my TF"): remember the last
+   TF per setup tab in localStorage, restore on boot. Wick tabs are 15m-only
+   (backtested on 15m) — their other TF buttons lock, with an on-bar note. */
+const LS_TF_KEY = v => 'liqscalp_tf_' + v;
+function persistTF(){ try{ localStorage.setItem(LS_TF_KEY(chartTab), TF); }catch(e){} }
+function updateTfLock(){
+  const locked = wickMode();
+  $('tfbar').classList.toggle('locked', locked);
+  document.querySelectorAll('#tfbar .tf').forEach(b => {
+    b.disabled = locked && b.dataset.tf !== 'M15';
+  });
+}
 function setTF(tf){
   if(!TFS.includes(tf) || tf === TF) return;
+  if(wickMode() && tf !== 'M15') return;   // wick tabs: 15m only, never silently mis-switch
   TF = tf;
   viewOffset = 0; priceShift = 0; priceZoom = 1; zoomPrice = null;   // re-anchor to the live edge on switch
   viewCount = tfViewCount(); userZoomed = false;  // readable default zoom per timeframe
   document.querySelectorAll('#tfbar .tf').forEach(b =>
     b.classList.toggle('active', b.dataset.tf === tf));
   applyFeedLabel();
+  persistTF();
   const [nowMs, m1c, h1c, h4c] = closedView();
   render(nowMs, m1c, h1c, h4c);
 }
@@ -1847,6 +1868,25 @@ async function boot(){
   // dead Finnhub keys can linger in old browsers (free keys can't hit the
   // forex endpoint — pulled 9 Oct 2026 per Mickey): clean them up
   try { localStorage.removeItem('finnhub_token'); } catch(e){}
+  // remember where he was (11 Oct 2026): restore last setup tab + its TF.
+  // no data yet at this point, so set state + button classes directly —
+  // the first recompute() after feeds load does the actual render.
+  try{
+    const lt = localStorage.getItem('liqscalp_tab');
+    if(lt && document.querySelector('.viewtab[data-view="' + lt + '"]')){
+      chartTab = lt;
+      document.querySelectorAll('.viewtab').forEach(x =>
+        x.classList.toggle('active', x.dataset.view === lt));
+    }
+    if(wickMode()) TF = 'M15';   // wick tabs are 15m-only, always
+    else {
+      const ltf = localStorage.getItem(LS_TF_KEY(chartTab));
+      if(ltf && TFS.includes(ltf)) TF = ltf;
+    }
+    document.querySelectorAll('#tfbar .tf').forEach(b =>
+      b.classList.toggle('active', b.dataset.tf === TF));
+    updateTfLock();
+  }catch(e){}
   // Yahoo primary, PAXG fallback
   let ok = false;
   if(!ok) ok = await bootFeeds();
@@ -1911,9 +1951,16 @@ async function boot(){
       chartTab = b.dataset.view;   // sniper | adv | dqrs | wick03 | wick04 — signal engine untouched
       document.querySelectorAll('.viewtab').forEach(x =>
         x.classList.toggle('active', x === b));
-      // wick strategies run on 15m — park the chart there on tab select
-      // (the TF bar still works if he wants to look around)
-      if (chartTab === 'wick03' || chartTab === 'wick04') setTF('M15');
+      try{ localStorage.setItem('liqscalp_tab', chartTab); }catch(e){}
+      updateTfLock();
+      // wick strategies run on 15m — park the chart there on tab select.
+      // other tabs restore their own remembered TF (11 Oct 2026).
+      if (wickMode()) setTF('M15');
+      else {
+        let rtf = null;
+        try{ rtf = localStorage.getItem(LS_TF_KEY(chartTab)); }catch(e){}
+        if (rtf && TFS.includes(rtf) && rtf !== TF) setTF(rtf);
+      }
       recompute();
     }));
   $('sndBtn').addEventListener('click', () => {
