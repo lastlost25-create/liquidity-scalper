@@ -107,6 +107,18 @@
   #err{position:absolute;top:56px;left:50%;transform:translateX(-50%);z-index:30;
     background:rgba(60,20,20,.95);border:1px solid var(--red);border-radius:10px;
     padding:10px 16px;font-size:12px;display:none;max-width:92%}
+  /* WICK experimental tabs (Mickey, 11 Oct 2026): amber TEST identity so test
+     signals can never be mistaken for sniper signals. Backtests negative —
+     observe only. */
+  .testbadge{font-size:8px;color:#f5a623;border:1px solid #f5a623;border-radius:3px;
+    padding:0 3px;margin-left:4px;vertical-align:1px;white-space:nowrap}
+  button.viewtab.wicktab.active{border-color:#f5a623;color:#f5a623}
+  #signalPanel.wicktest{border-color:#f5a623}
+  #wickBanner{flex:0 0 auto;z-index:20;display:none;background:rgba(60,38,4,.97);
+    border-bottom:1px solid #f5a623;color:#ffd97a;font-size:11px;line-height:1.5;
+    padding:7px 12px;text-align:center}
+  #wickBanner b{color:#ffb020}
+  @media (max-width:700px){ #wickBanner{font-size:10px;padding:6px 8px} }
   /* bar replay (Mickey, 7 Oct 2026): floating control bar over the chart */
   #replayBar{position:absolute;left:50%;transform:translateX(-50%);bottom:34px;z-index:26;
     background:rgba(10,14,20,.94);border:1px solid #f5c542;border-radius:12px;
@@ -174,6 +186,8 @@
     <button class="sym viewtab active" data-view="sniper" title="current sniper setup — live signals">SNIPER</button>
     <button class="sym viewtab" data-view="adv" title="major 4H + Daily reversal levels in advance">ADV REV</button>
     <button class="sym viewtab" data-view="dqrs" title="daily reversal levels in advance (D1 + daily open + PDH/PDL)">DQRS</button>
+    <button class="sym viewtab wicktab" data-view="wick03" title="TEST ONLY — experimental wick-rejection paper strategy (backtest negative), observe only">WICK 0.3<span class="testbadge">TEST</span></button>
+    <button class="sym viewtab wicktab" data-view="wick04" title="TEST ONLY — experimental wick-rejection paper strategy (backtest negative), observe only">WICK 0.4<span class="testbadge">TEST</span></button>
   </span>
   <span class="badge" id="fresh">···</span>
   <div id="price">–</div>
@@ -187,6 +201,9 @@
   <button class="tf" data-tf="H4">H4</button>
   <button class="tf" data-tf="D1">1D</button>
 </div>
+<!-- WICK experimental banner (11 Oct 2026): always visible on wick tabs —
+     backtests were negative, these are observe-only paper signals -->
+<div id="wickBanner" style="display:none"></div>
 
 <div id="stage">
   <div id="chartWrap"><canvas id="chart"></canvas></div>
@@ -253,7 +270,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=11"></script>
+<script src="engine.js?v=12"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -276,6 +293,25 @@ let FEED = null;                     // 'yahoo' | 'paxg' | 'tv'
 let M1 = [], H1 = [], H4 = [], D1 = []; // M1 includes the forming candle last
 let pools = [], signalsToday = [];
 let swingSignalsToday = [];   // v2 sniper swing setups (HTF pool -> M1 reclaim)
+// WICK experimental paper tabs (Mickey, 11 Oct 2026): 15m wick-rejection
+// strategies, observe-only. Backtests negative — never tradeable.
+let wick03Sigs = [], wick04Sigs = [];
+let wickEma = new Map();      // 15m bar t -> EMA200 (for the chart line)
+const WICK_BANNER_03 = '<b>🧪 EXPERIMENTAL</b> — 90-day backtest: 45.5% win rate, −0.29R/trade · <b>VERDICT: negative</b> — observe only, do NOT trade live · vol filter OFF (no volume on Yahoo feed)';
+const WICK_BANNER_04 = '<b>🧪 EXPERIMENTAL</b> — 90-day backtest: 53.2% win rate, −0.13R/trade · <b>VERDICT: negative</b> — observe only, do NOT trade live · vol filter OFF (no volume on Yahoo feed)';
+const wickMode = () => chartTab === 'wick03' || chartTab === 'wick04';
+const wickSigs = () => chartTab === 'wick03' ? wick03Sigs : wick04Sigs;
+function wickActive(){
+  // latest open test signal; if none open, the most recently closed one
+  const sigs = wickSigs().slice().sort((a, b) => Date.parse(b.signal_at) - Date.parse(a.signal_at));
+  return sigs.find(s => !s.outcome) || sigs[0] || null;
+}
+function wickTally(sigs){
+  const wins = sigs.filter(s => s.outcome && s.outcome.startsWith('TP')).length;
+  const losses = sigs.filter(s => s.outcome === 'SL').length;
+  const net = sigs.reduce((a, s) => a + (s.r || 0), 0);
+  return { n: sigs.length, wins, losses, net: Math.round(net * 100) / 100 };
+}
 let chartTab = 'sniper';             // chart setup tab: sniper | adv | dqrs
                                     // SNIPER = live signal setup (untouched);
                                     // ADV = 4H+Daily majors; DQRS = daily reversal map
@@ -552,6 +588,29 @@ function recompute(){
                           : Object.assign({}, s, { outcome: null, r: null });
     });
   }
+  // WICK experimental tabs (Mickey, 11 Oct 2026): 15m wick-rejection paper
+  // strategies, observe-only. Signals expire after 5h (20 x 15m) via
+  // track_outcome's maxHoldHours. One position at a time per strategy
+  // (the Pine `position_size == 0` gate), tracked independently per tab.
+  {
+    const m15c = LS.closed_only(M15, nowMs);
+    const withOc = arr => arr.map(s => {
+      const after = m15c.filter(b => b.t > Date.parse(s.signal_at));
+      return after.length ? Object.assign({}, s, LS.track_outcome(s, after, 5))
+                          : Object.assign({}, s, { outcome: null, r: null });
+    });
+    const w03 = withOc(LS.build_wick_signals(m15c, false));
+    const w04 = withOc(LS.build_wick_signals(m15c, true));
+    const k03 = new Set(LS.suppress_overlapping(w03));
+    const k04 = new Set(LS.suppress_overlapping(w04));
+    wick03Sigs = w03.filter(s => k03.has(s));
+    wick04Sigs = w04.filter(s => k04.has(s));
+    wickEma = new Map();
+    if (m15c.length > 200) {
+      const ea = LS.ema_series(m15c.map(b => b.c), 200);
+      m15c.forEach((b, i) => { if (ea[i] != null) wickEma.set(b.t, ea[i]); });
+    }
+  }
   // one open trade at a time (7 Oct 2026): while a signal is still running,
   // later signals are suppressed — no overlapping positions, no stacks of
   // signals firing at once (also kills same-minute scalp+swing duplicates)
@@ -621,6 +680,8 @@ function poolRow(p){
 }
 
 function renderPanels(nowMs, h1c, h4c){
+  const logH2 = document.querySelector('#logPanel h2');
+  if (logH2 && logH2.firstChild) logH2.firstChild.textContent = "Today's signals ";
   const price = M1.length ? M1[M1.length-1].c : 0;
   const pe = $('price');
   pe.textContent = '$' + price.toLocaleString('en-US',{minimumFractionDigits:2});
@@ -753,8 +814,94 @@ function renderPanels(nowMs, h1c, h4c){
 /* ---------------- chart ---------------- */
 function render(nowMs, m1c, h1c, h4c){
   patchForming();
-  renderPanels(nowMs, h1c, h4c);
+  const wm = wickMode();
+  if (wm) renderWickPanels(nowMs); else renderPanels(nowMs, h1c, h4c);
+  // experimental verdict banner — always visible on wick tabs
+  const wb = $('wickBanner');
+  if (wb) {
+    wb.style.display = wm ? 'block' : 'none';
+    if (wm) wb.innerHTML = chartTab === 'wick03' ? WICK_BANNER_03 : WICK_BANNER_04;
+  }
   drawChart(nowMs);
+}
+
+/* WICK experimental panels (Mickey, 11 Oct 2026): reuse the sniper tab's DOM
+   (signal panel + log) but fill it with paper-test content. No sound alerts,
+   no flashes — test signals must never demand attention like real ones. */
+function renderWickPanels(nowMs){
+  const sigs = wickSigs();
+  const act = wickActive();
+  const tag = chartTab === 'wick03' ? 'WICK 0.3' : 'WICK 0.4';
+  const t = wickTally(sigs);
+  const netC = t.net >= 0 ? 'var(--green)' : 'var(--red)';
+  const tallyHtml = `📝 paper (loaded 15m history) · ${t.n} sig · <span class="win">${t.wins}W</span>/<span class="loss">${t.losses}L</span> · net <b style="color:${netC}">${t.net >= 0 ? '+' : ''}${t.net}R</b>`;
+  const sp = $('signalPanel'), plan = $('plan');
+  const logH2 = document.querySelector('#logPanel h2');
+  if (logH2 && logH2.firstChild) logH2.firstChild.textContent = 'Wick test log ';
+  if (act && !act.outcome) {
+    setPanelClass(sp, 'wicktest ' + act.direction);
+    $('vtext').textContent = 'TEST ' + act.direction;
+    setVmini('TEST ' + act.direction, act.direction === 'LONG' ? 'var(--green)' : 'var(--red)');
+    plan.style.display = 'grid';
+    $('pEntry').textContent = act.entry.toFixed(2);
+    $('pSL').textContent = act.sl.toFixed(2);
+    $('pTP').textContent = act.tp.toFixed(2);
+    $('pRR').textContent = '1:' + act.rr.toFixed(2);
+    $('tp2row').style.display = 'none'; $('tp3row').style.display = 'none';
+    $('vsub').textContent = tag + ' · ' + act.direction + ' · signal ' + fmtT(Date.parse(act.signal_at)) + ' PKT · OBSERVE ONLY';
+    $('reason').textContent = '🧪 ' + act.reason;
+  } else if (act) {
+    const won = act.outcome && act.outcome.startsWith('TP');
+    setPanelClass(sp, 'wicktest ' + (won ? 'TP' : act.outcome === 'SL' ? 'SL' : 'WAIT'));
+    const lbl = act.outcome === 'TP' ? '🎯 TEST TP HIT'
+      : act.outcome === 'SL' ? '🛑 TEST SL HIT' : '⌛ TEST EXPIRED';
+    $('vtext').textContent = lbl;
+    setVmini(lbl, won ? 'var(--green)' : act.outcome === 'SL' ? 'var(--red)' : 'var(--dim)');
+    plan.style.display = 'none';
+    $('vsub').textContent = tag + ' · ' + act.direction + ' · ' + fmtT(Date.parse(act.signal_at)) + ' PKT · OBSERVE ONLY';
+    const rc = won ? 'var(--green)' : act.outcome === 'SL' ? 'var(--red)' : 'var(--dim)';
+    $('reason').innerHTML = `entry ${act.entry.toFixed(2)} · SL ${act.sl.toFixed(2)} · TP ${act.tp.toFixed(2)} → <b style="color:${rc}">${act.r > 0 ? '+' : ''}${act.r}R</b> · ${act.outcome}`;
+  } else {
+    plan.style.display = 'none';
+    setPanelClass(sp, 'wicktest WAIT');
+    $('vtext').textContent = 'TEST WAIT';
+    setVmini('TEST WAIT', 'var(--dim)');
+    $('vsub').textContent = tag + ' · no open test signal · OBSERVE ONLY';
+    $('reason').textContent = '⏳ Waiting for a 50%+ wick rejection vs EMA200 on 15m (no repaint — prints at candle close) · signals expire after 5h';
+  }
+  $('ctx').innerHTML = tallyHtml;
+  // trend badge: price vs the strategy's own EMA200 filter
+  const m15c = LS.closed_only(M15, nowMs);
+  const tb = $('trend');
+  if (m15c.length > 200) {
+    const ea = LS.ema_series(m15c.map(b => b.c), 200);
+    const e = ea[ea.length - 1], px = m15c[m15c.length - 1].c;
+    const up = px > e;
+    tb.textContent = (up ? '↗' : '↘') + ' EMA200';
+    tb.className = 'badge' + (up ? ' up' : ' dn');
+  }
+  // test log — same columns as the sniper log, newest first
+  const rows = sigs.slice().sort((a, b) => Date.parse(b.signal_at) - Date.parse(a.signal_at)).slice(0, 60);
+  $('logCount').textContent = rows.length ? '(' + sigs.length + ')' : '';
+  const ktag = chartTab === 'wick03' ? '<span class="ktag">W3</span> ' : '<span class="ktag">W4</span> ';
+  $('log').innerHTML = rows.length ? rows.map(x => {
+    const won = x.outcome && x.outcome.startsWith('TP');
+    const oc = x.outcome
+      ? `<span class="${won ? 'win' : 'loss'}">${x.outcome} ${x.r > 0 ? '+' : ''}${x.r}R</span>`
+      : '<span style="color:var(--dim)">open</span>';
+    return `<tr><td>${fmtT(Date.parse(x.signal_at))}</td><td class="${x.direction}">${ktag}${x.direction}</td>`
+      + `<td>${x.entry.toFixed(2)}</td><td>1:${x.rr.toFixed(2)}</td><td>${oc}</td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="empty">no 15m wick signals in loaded history — strict filter, this is normal</td></tr>';
+  // price + freshness line (sniper-only extras like pool panel stay untouched)
+  const price = M1.length ? M1[M1.length - 1].c : 0;
+  const pe = $('price');
+  pe.textContent = '$' + price.toLocaleString('en-US', { minimumFractionDigits: 2 });
+  pe.classList.remove('tick-up', 'tick-dn');
+  if (price > lastPrice) pe.classList.add('tick-up');
+  else if (price < lastPrice) pe.classList.add('tick-dn');
+  lastPrice = price;
+  $('updated').textContent = 'wick engine ' + fmtD(nowMs) + ' PKT';
+  paintClock(nowMs);
 }
 
 function drawChart(nowMs){
@@ -797,6 +944,8 @@ function drawChart(nowMs){
   const dqrsMode = chartTab === 'dqrs' && D1.length > 10 && !!LS.dqrs_levels;
   const levelMode = advMode || dqrsMode;   // pure level views: zones + pins only,
                                            // zero signal clutter, sniper untouched
+  const wickMode = chartTab === 'wick03' || chartTab === 'wick04';  // 11 Oct 2026:
+                                           // experimental paper tabs — own engine, own visuals
   let adv = null, dqrs = null;
   if (advMode) {
     const d1c = LS.closed_only(D1, nowMs);
@@ -806,14 +955,19 @@ function drawChart(nowMs){
     dqrs = LS.dqrs_levels(price0, D1, nowMs);
   }
   const pmap = LS.liquidity_map(price0, pools);   // only drawn pools set the axis
-  const act = marketOpen(nowMs) ? activeSignal(nowMs) : null;
-  const allSig = signalsToday.concat(swingSignalsToday);
+  const act = wickMode ? wickActive() : (marketOpen(nowMs) ? activeSignal(nowMs) : null);
+  const allSig = wickMode ? wickSigs() : signalsToday.concat(swingSignalsToday);
   if (!levelMode) {
-    pmap.above.concat(pmap.below).forEach(p => consider(p.price));
+    if (!wickMode) pmap.above.concat(pmap.below).forEach(p => consider(p.price));
     if(act){
       [act.entry, act.sl, act.tp, act.tp2, act.tp3].forEach(v => { if(v != null) consider(v); });
     }
     allSig.forEach(s => { if(s.entry != null) consider(s.entry); });
+    // wick tabs: keep the 200 EMA inside the vertical range
+    if (wickMode) for (const k of candles) {
+      const ev = wickEma.get(k.t);
+      if (ev != null) consider(ev);
+    }
   }
   if(!isFinite(lo)){ lo = 4100; hi = 4200; }
   const pad = ((hi - lo) * 0.10) || 1;
@@ -922,10 +1076,11 @@ function drawChart(nowMs){
                   : /(^|\+)PDL($|\+)/.test(z.src) ? '#ef4444' : '#b49aff',
     label: (z, major) => (major ? 'DQRS ★ ' : 'DQRS ') + z.src + ' · ' + z.price.toFixed(2),
   });
-  else {
+  else if (!wickMode) {
     pmap.above.forEach(p => band(p, '239,68,68'));    // sell-side liquidity = red
     pmap.below.forEach(p => band(p, '34,197,94'));    // buy-side liquidity = green
   }
+  // wick tabs draw no pool bands — the 200 EMA is the strategy's only level
 
   // candle width is anchored to the zoom level (viewCount), NOT the drawn count —
   // so a chart-shift (fewer drawn bars) leaves blank space instead of stretching.
@@ -947,7 +1102,8 @@ function drawChart(nowMs){
     if(live){ c.strokeRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1.5, Math.abs(yC - yO))); }
     else { c.fillStyle = col; c.fillRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1, Math.abs(yC - yO))); }
     if(entryIdx.has(i)){
-      c.strokeStyle = '#3b82f6'; c.lineWidth = 2;
+      // amber outline on wick tabs — test signals, not sniper signals
+      c.strokeStyle = wickMode ? '#f5a623' : '#3b82f6'; c.lineWidth = 2;
       c.strokeRect(x - bw/2 - 2.5, y(k.h) - 1.5, bw + 5, y(k.l) - y(k.h) + 3);
       c.lineWidth = 1;
     }
@@ -970,14 +1126,22 @@ function drawChart(nowMs){
     c.fillStyle = '#0a0e14'; c.fillText(txt, pw + 4, yy + 3.5);
   };
   // EN/SL/TP lines: sniper tab only — level-map tabs stay clean.
+  // Wick tabs get TEST-prefixed lines with an amber entry so a test plan
+  // can never be mistaken for a sniper signal.
   if(act && !levelMode){
-    level(act.tp, '#22c55e', act.kind === 'swing' ? 'TP1' : 'TP');
-    if(act.kind === 'swing'){
-      if(act.tp2 != null) level(act.tp2, '#4ade80', 'TP2', [7, 5]);
-      if(act.tp3 != null) level(act.tp3, '#86efac', 'TP3', [3, 4]);
+    if (wickMode) {
+      level(act.tp, '#22c55e', 'TEST TP');
+      level(act.entry, '#f5a623', 'TEST EN', [7, 5]);
+      level(act.sl, '#ef4444', 'TEST SL');
+    } else {
+      level(act.tp, '#22c55e', act.kind === 'swing' ? 'TP1' : 'TP');
+      if(act.kind === 'swing'){
+        if(act.tp2 != null) level(act.tp2, '#4ade80', 'TP2', [7, 5]);
+        if(act.tp3 != null) level(act.tp3, '#86efac', 'TP3', [3, 4]);
+      }
+      level(act.entry, '#3b82f6', 'EN', [7, 5]);
+      level(act.sl, '#ef4444', 'SL');
     }
-    level(act.entry, '#3b82f6', 'EN', [7, 5]);
-    level(act.sl, '#ef4444', 'SL');
   }
   // Historical markers: every signal today gets an entry triangle on its
   // entry candle, colored by outcome (green TP / red SL / gray open).
@@ -1007,6 +1171,31 @@ function drawChart(nowMs){
     }
   }
   } // end !levelMode — signal markers
+  // WICK tabs: 200 EMA (blue, like the Pine plot) — the strategy's trend filter
+  if (wickMode && wickEma.size){
+    c.strokeStyle = '#3b82f6'; c.lineWidth = 1.6;
+    c.beginPath();
+    let started = false;
+    for (let i = 0; i < n; i++){
+      const ev = wickEma.get(candles[i].t);
+      if (ev == null || ev < lo || ev > hi) { started = false; continue; }
+      const x = i * cw + cw / 2, yy = y(ev);
+      if (!started) { c.moveTo(x, yy); started = true; } else c.lineTo(x, yy);
+    }
+    c.stroke(); c.lineWidth = 1;
+    // tag the EMA value at the right edge
+    for (let i = n - 1; i >= 0; i--){
+      const ev = wickEma.get(candles[i].t);
+      if (ev != null && ev >= lo && ev <= hi){
+        const yy = Math.round(y(ev)) + .5;
+        c.font = '700 10px system-ui';
+        const etxt = ev.toFixed(1);
+        c.fillStyle = '#3b82f6'; c.fillRect(pw, yy - 9, AXW, 18);
+        c.fillStyle = '#0a0e14'; c.fillText(etxt, pw + 4, yy + 3.5);
+        break;
+      }
+    }
+  }
   // live price line (MT5-style): bright dashed line + tag, always drawn on top
   {
     const yy = Math.round(y(price)) + .5;
@@ -1719,9 +1908,12 @@ async function boot(){
   });
   document.querySelectorAll('.viewtab').forEach(b =>
     b.addEventListener('click', () => {
-      chartTab = b.dataset.view;   // sniper | adv | dqrs — signal engine untouched
+      chartTab = b.dataset.view;   // sniper | adv | dqrs | wick03 | wick04 — signal engine untouched
       document.querySelectorAll('.viewtab').forEach(x =>
         x.classList.toggle('active', x === b));
+      // wick strategies run on 15m — park the chart there on tab select
+      // (the TF bar still works if he wants to look around)
+      if (chartTab === 'wick03' || chartTab === 'wick04') setTF('M15');
       recompute();
     }));
   $('sndBtn').addEventListener('click', () => {
