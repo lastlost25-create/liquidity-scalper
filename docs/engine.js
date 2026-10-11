@@ -678,6 +678,153 @@ function dqrs_levels(price, d1bars, nowMs, tol = 1.00) {
   return { above, below };
 }
 
+/* ----------------------------------------------------------------------------
+ * WICK REJECTION — experimental paper-observation tabs (Mickey, 11 Oct 2026).
+ * JS port of the "Ultra-Shielded Wick Strategy" V0.3 / V0.4 Pine scripts.
+ *
+ *   V0.3: 15m candle with rejection wick >= 50% of range, wick > body,
+ *         body closes in the rejection direction, close beyond EMA(200).
+ *         Entry at signal-bar close, SL = entry -/+ ATR(14)*1.2,
+ *         TP = entry +/- ATR(14)*1.5 (fixed at entry — Pine `var` semantics).
+ *   V0.4: everything in V0.3 PLUS Stochastic %K(14, smooth 3):
+ *         long requires K <= 20, short requires K >= 80.
+ *
+ * ⚠️ 90-day XAUUSD 15m backtests were NEGATIVE (V0.3: 45.5% WR, -0.29R/trade;
+ * V0.4: 53.2% WR, -0.13R/trade). These tabs are OBSERVE-ONLY — never
+ * presented as tradeable signals. Volume filter OFF (Yahoo XAUUSD has no
+ * volume; matches the backtested config). No session filter (the Pine
+ * trades 24/7). One position at a time (Pine `position_size == 0` gate —
+ * enforced page-side via suppress_overlapping, like the sniper).
+ * Closed 15m candles only — no repaint.
+ * -------------------------------------------------------------------------- */
+const WICK = {
+  wickPct: 50, emaLen: 200, atrLen: 14,
+  tpMult: 1.5, slMult: 1.2,                 // RR is always 1.5/1.2 = 1.25
+  stochLen: 14, stochSmooth: 3, stochOS: 20, stochOB: 80,
+  warmup: 210,                             // > max(emaLen, atrLen, stochLen): indicators settled
+};
+
+// EMA series aligned to closes[i]. Seeded with SMA (Pine seeds with the first
+// close — the difference is dust after `warmup` bars of a 200-EMA).
+function ema_series(closes, len) {
+  const out = new Array(closes.length).fill(null);
+  if (closes.length < len) return out;
+  const k = 2 / (len + 1);
+  let sma = 0;
+  for (let i = 0; i < len; i++) sma += closes[i];
+  sma /= len;
+  out[len - 1] = sma;
+  let prev = sma;
+  for (let i = len; i < closes.length; i++) {
+    prev = closes[i] * k + prev * (1 - k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+// Wilder ATR series aligned to bars[i] (Pine ta.atr / ta.rma seeding).
+function atr_series(bars, len) {
+  const out = new Array(bars.length).fill(null);
+  if (bars.length < len + 1) return out;
+  const trs = [];
+  for (let i = 1; i < bars.length; i++) {
+    trs.push(Math.max(bars[i].h - bars[i].l,
+      Math.abs(bars[i].h - bars[i - 1].c),
+      Math.abs(bars[i].l - bars[i - 1].c)));
+  }
+  let atr = 0;
+  for (let i = 0; i < len; i++) atr += trs[i];
+  atr /= len;
+  out[len] = atr;
+  for (let i = len + 1; i < bars.length; i++) {
+    atr = (atr * (len - 1) + trs[i - 1]) / len;
+    out[i] = atr;
+  }
+  return out;
+}
+
+// Stochastic %K series aligned to bars[i] — Pine-faithful:
+// rawK = (close - lowestLow) / (highestHigh - lowestLow) * 100, then SMA(smooth).
+function stochk_series(bars, len, smooth) {
+  const raw = new Array(bars.length).fill(null);
+  for (let i = len - 1; i < bars.length; i++) {
+    let hh = -Infinity, ll = Infinity;
+    for (let j = i - len + 1; j <= i; j++) {
+      if (bars[j].h > hh) hh = bars[j].h;
+      if (bars[j].l < ll) ll = bars[j].l;
+    }
+    raw[i] = (hh - ll) > 0 ? (bars[i].c - ll) / (hh - ll) * 100 : 50;
+  }
+  const out = new Array(bars.length).fill(null);
+  for (let i = len - 1 + smooth - 1; i < bars.length; i++) {
+    let s = 0;
+    for (let j = i - smooth + 1; j <= i; j++) s += raw[j];
+    out[i] = s / smooth;
+  }
+  return out;
+}
+
+/**
+ * Scan CLOSED 15m bars for wick-rejection signals. Mirrors the Pine scripts.
+ * useStoch=false -> V0.3; true -> V0.4 (adds the Stochastic gate).
+ * Returns raw signals (no outcomes, no overlap suppression — page-side does
+ * that with track_outcome + suppress_overlapping, like the sniper):
+ * { kind, direction, entry, sl, tp, rr, signal_at, wick_pct, ema200,
+ *   stoch_k, reason }.
+ * Entry = signal-bar close (matches the backtest port; Pine live fills the
+ * next open — noted, applied equally to every signal).
+ */
+function build_wick_signals(bars, useStoch) {
+  const signals = [];
+  if (bars.length < WICK.warmup + 2) return signals;
+  const closes = bars.map(b => b.c);
+  const ema = ema_series(closes, WICK.emaLen);
+  const atr = atr_series(bars, WICK.atrLen);
+  const sk = useStoch ? stochk_series(bars, WICK.stochLen, WICK.stochSmooth) : null;
+  const kind = useStoch ? 'wick04' : 'wick03';
+  for (let i = WICK.warmup; i < bars.length; i++) {
+    const b = bars[i];
+    const range = b.h - b.l;
+    if (!(range > 0)) continue;
+    const e = ema[i], a = atr[i];
+    if (e == null || !(a > 0)) continue;
+    const bodySize = Math.abs(b.c - b.o);
+    const bodyTop = Math.max(b.o, b.c), bodyBottom = Math.min(b.o, b.c);
+    const topWick = b.h - bodyTop, botWick = bodyBottom - b.l;
+    const topPct = topWick / range * 100, botPct = botWick / range * 100;
+    let longC = botPct >= WICK.wickPct && b.c > e && botWick > bodySize && b.c > b.o;
+    let shortC = topPct >= WICK.wickPct && b.c < e && topWick > bodySize && b.c < b.o;
+    let kTxt = '';
+    if (useStoch) {
+      const k = sk[i];
+      if (k == null) continue;
+      kTxt = ` · Stoch K ${k.toFixed(0)}`;
+      longC = longC && k <= WICK.stochOS;
+      shortC = shortC && k >= WICK.stochOB;
+    }
+    if (!longC && !shortC) continue;
+    const dir = longC ? 'LONG' : 'SHORT';
+    const entry = b.c;
+    const sl = dir === 'LONG' ? entry - a * WICK.slMult : entry + a * WICK.slMult;
+    const tp = dir === 'LONG' ? entry + a * WICK.tpMult : entry - a * WICK.tpMult;
+    const risk = Math.abs(entry - sl);
+    if (!(risk > 0)) continue;
+    const wickPct = dir === 'LONG' ? botPct : topPct;
+    signals.push({
+      kind, direction: dir,
+      entry: round2(entry), sl: round2(sl), tp: round2(tp),
+      rr: round2(Math.abs(tp - entry) / risk),
+      signal_at: iso(b.t),
+      wick_pct: round2(wickPct), ema200: round2(e),
+      stoch_k: useStoch ? round2(sk[i]) : null,
+      reason: `${dir === 'LONG' ? 'Bullish' : 'Bearish'} wick rejection ${wickPct.toFixed(0)}%` +
+        ` · close ${dir === 'LONG' ? 'above' : 'below'} EMA200 ${e.toFixed(2)}` +
+        ` · ATR ${a.toFixed(2)}${kTxt} · vol filter OFF`,
+    });
+  }
+  return signals;
+}
+
 // Node + browser export
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
@@ -685,6 +832,7 @@ if (typeof module !== 'undefined' && module.exports) {
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
     track_outcome, track_swing_outcome, peak_profit_r, suppress_overlapping, liquidity_map,
     detect_daily_levels, adv_major_levels, dqrs_levels, iso, utcDay, DAY_MS,
+    WICK, ema_series, atr_series, stochk_series, build_wick_signals,
   };
 } else if (typeof window !== 'undefined') {
   window.LS = {
@@ -692,5 +840,6 @@ if (typeof module !== 'undefined' && module.exports) {
     check_sweep, nearest_opposing_pool, closed_only, build_signals, build_swing_signals_v2,
     track_outcome, track_swing_outcome, peak_profit_r, suppress_overlapping, liquidity_map,
     detect_daily_levels, adv_major_levels, dqrs_levels, iso, utcDay, DAY_MS,
+    WICK, ema_series, atr_series, stochk_series, build_wick_signals,
   };
 }
