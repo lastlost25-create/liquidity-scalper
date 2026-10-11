@@ -72,6 +72,10 @@
   #tfnote{display:none;font-size:10px;color:#f5a623;align-self:center;
     white-space:nowrap;padding-left:4px}
   #tfbar.locked #tfnote{display:inline}
+  /* BTC tab strategy selector (Mickey, 11 Oct 2026): WICK 0.3 / WICK 0.4 /
+     chart-only — same look as the TF bar, visible on the BTC tab only */
+  #stratbar{display:none;gap:6px;padding:6px 12px;background:var(--card);
+    border-bottom:1px solid var(--line);flex:0 0 auto;z-index:20}
   #rulesPanel{right:10px;bottom:10px;width:252px;max-height:56%;overflow-y:auto;display:none;
     border-color:#7a5b12}
   #rulesPanel.open{display:block}
@@ -194,6 +198,7 @@
     <button class="sym viewtab" data-view="dqrs" title="daily reversal levels in advance (D1 + daily open + PDH/PDL)">DQRS</button>
     <button class="sym viewtab wicktab" data-view="wick03" title="TEST ONLY — experimental wick-rejection paper strategy (backtest negative), observe only">WICK 0.3<span class="testbadge">TEST</span></button>
     <button class="sym viewtab wicktab" data-view="wick04" title="TEST ONLY — experimental wick-rejection paper strategy (backtest negative), observe only">WICK 0.4<span class="testbadge">TEST</span></button>
+    <button class="sym viewtab wicktab" data-view="btc" title="TEST ONLY — BTCUSD paper observation (backtests negative), observe only">BTCUSD<span class="testbadge">TEST</span></button>
   </span>
   <span class="badge" id="fresh">···</span>
   <div id="price">–</div>
@@ -208,6 +213,11 @@
   <button class="tf" data-tf="H4">H4</button>
   <button class="tf" data-tf="D1">1D</button>
   <span id="tfnote">WICK runs on 15m only</span>
+</div>
+<div id="stratbar">
+  <button class="tf strat" data-strat="wick03">WICK 0.3</button>
+  <button class="tf strat" data-strat="wick04">WICK 0.4</button>
+  <button class="tf strat" data-strat="chart">CHART</button>
 </div>
 <!-- WICK experimental banner (11 Oct 2026): always visible on wick tabs —
      backtests were negative, these are observe-only paper signals -->
@@ -278,7 +288,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=14"></script>
+<script src="engine.js?v=15"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -325,6 +335,123 @@ function wickTally(sigs){
   const net = sigs.reduce((a, s) => a + (s.r || 0), 0);
   return { n: sigs.length, wins, losses, net: Math.round(net * 100) / 100 };
 }
+/* BTCUSD paper-observation tab (Mickey, 11 Oct 2026): BTCUSDT via Binance
+   public klines (no key). Same wick-rejection engine as the gold wick tabs
+   (build_wick_signals is symbol-agnostic) — NO sniper on BTC (gold-tuned,
+   failed on BTC). 24/7 market: no weekend-closed logic. Backtests negative
+   (15m: wick03 −0.80R/trade, wick04 −0.84R/trade) — observe only. */
+const BTC_API = 'https://data-api.binance.vision';
+const BTC_TFS = ['M1','M5','M15'];
+let BTC = { M1: [], M5: [], M15: [] };
+let btcStrat = 'wick03';            // wick03 | wick04 | chart (strategy selector)
+let btcSigs = { wick03: { M1: [], M5: [], M15: [] }, wick04: { M15: [] } };
+let btcEma = { M1: new Map(), M5: new Map(), M15: new Map() };
+let btcFeedOn = false, btcPollTimer = null, btcRefreshTimer = null;
+const BTC_BANNER_03 = '<b>🧪 EXPERIMENTAL</b> — BTC 15m backtest: −0.80R/trade · <b>VERDICT: negative</b> — observe only, do NOT trade live · tab runs volume-filter OFF';
+const BTC_BANNER_04 = '<b>🧪 EXPERIMENTAL</b> — BTC 15m backtest: −0.84R/trade · <b>VERDICT: negative</b> — observe only, do NOT trade live · tab runs volume-filter OFF';
+const btcWickMode = () => chartTab === 'btc' && btcStrat !== 'chart';
+function btcSigsFor(){
+  if (btcStrat === 'chart') return [];
+  return (btcSigs[btcStrat] && btcSigs[btcStrat][TF]) || [];
+}
+function btcActive(){
+  const sigs = btcSigsFor().slice().sort((a, b) => Date.parse(b.signal_at) - Date.parse(a.signal_at));
+  return sigs.find(s => !s.outcome) || sigs[0] || null;
+}
+function btcPrice(){
+  const m = BTC.M1;
+  return m.length ? m[m.length - 1].c : 0;
+}
+async function btcKlines(interval, limit){
+  const r = await fetch(`${BTC_API}/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
+  if(!r.ok) throw new Error('BTC HTTP ' + r.status);
+  return (await r.json()).map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] }));
+}
+function patchBtcForming(){
+  // roll the BTC M5/M15 stores forward + patch the forming bar from the
+  // latest 1m tick (mirrors patchForming for gold; engine uses closed bars)
+  const nowMs = Date.now();
+  const px = BTC.M1.length ? BTC.M1[BTC.M1.length - 1].c : null;
+  if(px == null) return;
+  for(const [key, ms] of [['M15', TF_MS.M15], ['M5', TF_MS.M5]]){
+    const store = BTC[key];
+    const kk = Math.floor(nowMs / ms) * ms;
+    const l = store[store.length - 1];
+    if(l && kk > l.t) store.push({ t: kk, o: px, h: px, l: px, c: px });
+    const b = store[store.length - 1];
+    if(b && nowMs >= b.t && nowMs < b.t + ms){
+      if(px > b.h) b.h = px;
+      if(px < b.l) b.l = px;
+      b.c = px;
+    }
+  }
+}
+async function btcPoll(){
+  try {
+    const bars = await btcKlines('1m', 3);
+    const map = new Map(BTC.M1.map(b => [b.t, b]));
+    for(const b of bars) map.set(b.t, b);
+    BTC.M1 = [...map.values()].sort((a, b) => a.t - b.t).slice(-1500);
+    patchBtcForming();
+    if(chartTab === 'btc') recomputeBtc();
+    setFresh('live');
+  } catch(e){ /* quiet — retry next poll */ }
+}
+async function btcRefreshTFs(){
+  try {
+    const [m5, m15] = await Promise.all([btcKlines('5m', 1000), btcKlines('15m', 1000)]);
+    BTC.M5 = m5; BTC.M15 = m15;
+    if(chartTab === 'btc') recomputeBtc();
+  } catch(e){}
+}
+async function btcResync(){
+  if(!btcFeedOn){ ensureBtcFeed(); return; }
+  await btcPoll();
+}
+async function ensureBtcFeed(){
+  if(btcFeedOn){ btcResync(); return; }
+  try {
+    const [m1, m5, m15] = await Promise.all([
+      btcKlines('1m', 1000), btcKlines('5m', 1000), btcKlines('15m', 1000)]);
+    if(!m1.length) throw new Error('empty btc');
+    BTC = { M1: m1, M5: m5, M15: m15 };
+    btcFeedOn = true;
+    recomputeBtc();
+    setFresh('live');
+    btcPollTimer = setInterval(btcPoll, 20000);
+    btcRefreshTimer = setInterval(btcRefreshTFs, 5 * 60 * 1000);
+  } catch(e){
+    err('BTC feed unreachable: ' + e.message);
+  }
+}
+/* Recompute BTC wick signals per strategy + TF (never mixed tallies).
+   Mirrors the gold wick block in recompute(): closed bars, 5h expiry,
+   one position at a time per strategy+TF via suppress_overlapping. */
+function recomputeBtc(){
+  const nowMs = Date.now();
+  if(BTC.M1.length < 10) return;
+  for(const tf of BTC_TFS){
+    const bars = LS.closed_only(BTC[tf], nowMs);
+    if(bars.length < 10) continue;
+    for(const [key, useStoch] of [['wick03', false], ['wick04', true]]){
+      if(key === 'wick04' && tf !== 'M15') continue;
+      const sigs = LS.build_wick_signals(bars, useStoch).map(s => {
+        const after = bars.filter(b => b.t > Date.parse(s.signal_at));
+        return after.length ? Object.assign({}, s, LS.track_outcome(s, after, 5))
+                            : Object.assign({}, s, { outcome: null, r: null });
+      });
+      const kept = new Set(LS.suppress_overlapping(sigs));
+      btcSigs[key][tf] = sigs.filter(s => kept.has(s)).map(s => Object.assign({}, s, { tf }));
+    }
+    if(bars.length > 200){
+      const ea = LS.ema_series(bars.map(b => b.c), 200);
+      const m = new Map();
+      bars.forEach((b, i) => { if(ea[i] != null) m.set(b.t, ea[i]); });
+      btcEma[tf] = m;
+    }
+  }
+  render(nowMs);
+}
 let chartTab = 'sniper';             // chart setup tab: sniper | adv | dqrs
                                     // SNIPER = live signal setup (untouched);
                                     // ADV = 4H+Daily majors; DQRS = daily reversal map
@@ -341,6 +468,7 @@ let TF = 'M1';
 let M15 = [];
 let M5 = [];   // native 5m store (mirrors the M15 fetch sites); wick03 runs M1/M5/M15
 function tfBars(){
+  if (chartTab === 'btc') return BTC[TF] || [];
   return TF === 'M1' ? M1 : TF === 'M5' ? M5 : TF === 'M15' ? M15 : TF === 'H1' ? H1 : TF === 'H4' ? H4 : D1;
 }
 /* M15 is a native store (deep history, like H1/H4/D1) — the engine never
@@ -398,18 +526,28 @@ function persistTF(){ try{ localStorage.setItem(LS_TF_KEY(chartTab), TF); }catch
    wick03 runs M1/M5/M15 (backtested 15m; M1/M5 untested), wick04 stays 15m-only. */
 const WICK03_TFS = ['M1','M5','M15'];
 function updateTfLock(){
-  const w03 = chartTab === 'wick03', w04 = chartTab === 'wick04';
-  $('tfbar').classList.toggle('locked', w03 || w04);
-  if (w03 || w04) $('tfnote').textContent = w04 ? 'WICK runs on 15m only' : 'WICK 0.3: M1/M5/M15';
+  const w03 = chartTab === 'wick03', w04 = chartTab === 'wick04', btc = chartTab === 'btc';
+  $('tfbar').classList.toggle('locked', w03 || w04 || btc);
+  if (btc) $('tfnote').textContent = 'BTC: M1/M5/M15';
+  else if (w03 || w04) $('tfnote').textContent = w04 ? 'WICK runs on 15m only' : 'WICK 0.3: M1/M5/M15';
   document.querySelectorAll('#tfbar .tf').forEach(b => {
     const t = b.dataset.tf;
-    b.disabled = w04 ? t !== 'M15' : w03 ? !WICK03_TFS.includes(t) : false;
+    b.disabled = btc ? !BTC_TFS.includes(t) : w04 ? t !== 'M15' : w03 ? !WICK03_TFS.includes(t) : false;
   });
+  // BTC strategy selector lives in its own bar, visible on the BTC tab only
+  const sb = $('stratbar');
+  if (sb) sb.style.display = btc ? 'flex' : 'none';
+  if (btc) updateStratbar();
+}
+function updateStratbar(){
+  document.querySelectorAll('#stratbar .strat').forEach(x =>
+    x.classList.toggle('active', x.dataset.strat === btcStrat));
 }
 function setTF(tf){
   if(!TFS.includes(tf) || tf === TF) return;
   if(chartTab === 'wick04' && tf !== 'M15') return;   // wick04: 15m only
   if(chartTab === 'wick03' && !WICK03_TFS.includes(tf)) return;  // wick03: M1/M5/M15
+  if(chartTab === 'btc' && !BTC_TFS.includes(tf)) return;        // btc: M1/M5/M15
   TF = tf;
   viewOffset = 0; priceShift = 0; priceZoom = 1; zoomPrice = null;   // re-anchor to the live edge on switch
   viewCount = tfViewCount(); userZoomed = false;  // readable default zoom per timeframe
@@ -469,6 +607,11 @@ async function paxgKlines(interval, limit){
   return (await r.json()).map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] }));
 }
 function applyFeedLabel(){
+  if(chartTab === 'btc'){
+    $('symLabel').innerHTML = 'BTCUSD · ' + TF;
+    $('feedNote').textContent = 'BTCUSD via Binance public klines · tap label to resync';
+    return;
+  }
   if(FEED === 'yahoo'){
     $('symLabel').innerHTML = 'XAUUSD · ' + TF + ' <span style="opacity:.5">⇄</span>';
     $('feedNote').textContent = 'XAUUSD spot via Yahoo Finance · close to Exness/OANDA · tap label to switch';
@@ -505,6 +648,7 @@ async function attemptYahooNow(){
   } catch(e){ return false; }
 }
 function toggleFeed(){
+  if(chartTab === 'btc'){ btcResync(); return; }   // BTC feed is independent — resync it
   if(FEED === 'yahoo'){ switchToPaxg(); }
   else if(FEED === 'paxg'){ connectTV(); }
   else if(FEED === 'tv'){
@@ -863,6 +1007,23 @@ function renderPanels(nowMs, h1c, h4c){
 /* ---------------- chart ---------------- */
 function render(nowMs, m1c, h1c, h4c){
   patchForming();
+  if (chartTab === 'btc') {
+    renderBtcPanels(nowMs);
+    // BTC verdict banner — strategy-dependent; chart-only needs none
+    const wb = $('wickBanner');
+    if (wb) {
+      const show = btcStrat !== 'chart';
+      wb.style.display = show ? 'block' : 'none';
+      if (show) wb.innerHTML = btcStrat === 'wick03' ? BTC_BANNER_03 : BTC_BANNER_04;
+    }
+    // killzone countdown is a gold/sniper concept — hide it on the 24/7 BTC tab
+    const sb = $('session');
+    if (sb) sb.style.display = 'none';
+    drawChart(nowMs);
+    return;
+  }
+  const sb0 = $('session');
+  if (sb0) sb0.style.display = '';
   const wm = wickMode();
   if (wm) renderWickPanels(nowMs); else renderPanels(nowMs, h1c, h4c);
   // experimental verdict banner — always visible on wick tabs
@@ -954,6 +1115,93 @@ function renderWickPanels(nowMs){
   paintClock(nowMs);
 }
 
+/* BTC panels (Mickey, 11 Oct 2026): reuse the wick tab's DOM (signal panel +
+   log) filled with BTC paper-test content. No sound alerts, no flashes.
+   Chart-only strategy shows a plain chart state. BTC trades 24/7 — no
+   weekend/market-closed logic here. */
+function renderBtcPanels(nowMs){
+  const sigs = btcSigsFor();
+  const act = btcActive();
+  const tag = btcStrat === 'wick03' ? 'BTC WICK 0.3' : btcStrat === 'wick04' ? 'BTC WICK 0.4' : 'BTC CHART';
+  const t = wickTally(sigs);
+  const netC = t.net >= 0 ? 'var(--green)' : 'var(--red)';
+  const tallyHtml = btcStrat === 'chart'
+    ? `📝 chart only · no strategy running`
+    : `📝 paper <b>${TF}</b> · loaded history · ${t.n} sig · <span class="win">${t.wins}W</span>/<span class="loss">${t.losses}L</span> · net <b style="color:${netC}">${t.net >= 0 ? '+' : ''}${t.net}R</b>`;
+  const sp = $('signalPanel'), plan = $('plan');
+  const logH2 = document.querySelector('#logPanel h2');
+  if (logH2 && logH2.firstChild) logH2.firstChild.textContent = 'BTC test log ';
+  if (btcStrat === 'chart') {
+    plan.style.display = 'none';
+    setPanelClass(sp, 'wicktest WAIT');
+    $('vtext').textContent = 'CHART';
+    setVmini('CHART', 'var(--dim)');
+    $('vsub').textContent = 'BTCUSD · ' + TF + ' · Binance feed · no strategy — pick WICK 0.3/0.4 above to paper-test';
+    $('reason').textContent = '📊 Plain BTCUSD chart — drag / zoom / crosshair all work';
+  } else if (act && !act.outcome) {
+    setPanelClass(sp, 'wicktest ' + act.direction);
+    $('vtext').textContent = 'TEST ' + act.direction;
+    setVmini('TEST ' + act.direction, act.direction === 'LONG' ? 'var(--green)' : 'var(--red)');
+    plan.style.display = 'grid';
+    $('pEntry').textContent = act.entry.toFixed(2);
+    $('pSL').textContent = act.sl.toFixed(2);
+    $('pTP').textContent = act.tp.toFixed(2);
+    $('pRR').textContent = '1:' + act.rr.toFixed(2);
+    $('tp2row').style.display = 'none'; $('tp3row').style.display = 'none';
+    $('vsub').textContent = tag + ' · ' + TF + ' · ' + act.direction + ' · signal ' + fmtT(Date.parse(act.signal_at)) + ' PKT · OBSERVE ONLY';
+    $('reason').textContent = '🧪 ' + act.reason;
+  } else if (act) {
+    const won = act.outcome && act.outcome.startsWith('TP');
+    setPanelClass(sp, 'wicktest ' + (won ? 'TP' : act.outcome === 'SL' ? 'SL' : 'WAIT'));
+    const lbl = act.outcome === 'TP' ? '🎯 TEST TP HIT'
+      : act.outcome === 'SL' ? '🛑 TEST SL HIT' : '⌛ TEST EXPIRED';
+    $('vtext').textContent = lbl;
+    setVmini(lbl, won ? 'var(--green)' : act.outcome === 'SL' ? 'var(--red)' : 'var(--dim)');
+    plan.style.display = 'none';
+    $('vsub').textContent = tag + ' · ' + TF + ' · ' + act.direction + ' · ' + fmtT(Date.parse(act.signal_at)) + ' PKT · OBSERVE ONLY';
+    const rc = won ? 'var(--green)' : act.outcome === 'SL' ? 'var(--red)' : 'var(--dim)';
+    $('reason').innerHTML = `entry ${act.entry.toFixed(2)} · SL ${act.sl.toFixed(2)} · TP ${act.tp.toFixed(2)} → <b style="color:${rc}">${act.r > 0 ? '+' : ''}${act.r}R</b> · ${act.outcome}`;
+  } else {
+    plan.style.display = 'none';
+    setPanelClass(sp, 'wicktest WAIT');
+    $('vtext').textContent = 'TEST WAIT';
+    setVmini('TEST WAIT', 'var(--dim)');
+    $('vsub').textContent = tag + ' · ' + TF + ' · no open test signal · OBSERVE ONLY';
+    $('reason').textContent = `⏳ Waiting for a 50%+ wick rejection vs EMA200 on ${TF} (no repaint — prints at candle close) · signals expire after 5h`;
+  }
+  $('ctx').innerHTML = tallyHtml;
+  // trend badge: BTC price vs the strategy's own EMA200 filter
+  const wbars = LS.closed_only(BTC[TF] || [], nowMs);
+  const tb = $('trend');
+  if (wbars.length > 200) {
+    const ea = LS.ema_series(wbars.map(b => b.c), 200);
+    const e = ea[ea.length - 1], px = wbars[wbars.length - 1].c;
+    const up = px > e;
+    tb.textContent = (up ? '↗' : '↘') + ' EMA200';
+    tb.className = 'badge' + (up ? ' up' : ' dn');
+  }
+  const rows = sigs.slice().sort((a, b) => Date.parse(b.signal_at) - Date.parse(a.signal_at)).slice(0, 60);
+  $('logCount').textContent = rows.length ? '(' + sigs.length + ')' : '';
+  const ktag = btcStrat === 'wick03' ? '<span class="ktag">BW3</span> ' : '<span class="ktag">BW4</span> ';
+  $('log').innerHTML = rows.length ? rows.map(x => {
+    const won = x.outcome && x.outcome.startsWith('TP');
+    const oc = x.outcome
+      ? `<span class="${won ? 'win' : 'loss'}">${x.outcome} ${x.r > 0 ? '+' : ''}${x.r}R</span>`
+      : '<span style="color:var(--dim)">open</span>';
+    return `<tr><td>${fmtT(Date.parse(x.signal_at))} <span class="tag">${x.tf || TF}</span></td><td class="${x.direction}">${ktag}${x.direction}</td>`
+      + `<td>${x.entry.toFixed(2)}</td><td>1:${x.rr.toFixed(2)}</td><td>${oc}</td></tr>`;
+  }).join('') : `<tr><td colspan="5" class="empty">${btcStrat === 'chart' ? 'chart-only mode — no signals' : 'no ' + TF + ' wick signals in loaded history — strict filter, this is normal'}</td></tr>`;
+  const price = btcPrice();
+  const pe = $('price');
+  pe.textContent = '$' + price.toLocaleString('en-US', { minimumFractionDigits: 2 });
+  pe.classList.remove('tick-up', 'tick-dn');
+  if (price > lastPrice) pe.classList.add('tick-up');
+  else if (price < lastPrice) pe.classList.add('tick-dn');
+  lastPrice = price;
+  $('updated').textContent = 'btc engine ' + fmtD(nowMs) + ' PKT';
+  paintClock(nowMs);
+}
+
 function drawChart(nowMs){
   const wrap = $('chartWrap'), cv = $('chart');
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
@@ -989,13 +1237,15 @@ function drawChart(nowMs){
   let lo = Infinity, hi = -Infinity;
   const consider = v => { if(v < lo) lo = v; if(v > hi) hi = v; };
   candles.forEach(k => { consider(k.l); consider(k.h); });
-  const price0 = M1[M1.length-1].c;
+  const price0 = chartTab === 'btc' ? btcPrice() : M1[M1.length-1].c;
   const advMode = chartTab === 'adv' && D1.length > 10;
   const dqrsMode = chartTab === 'dqrs' && D1.length > 10 && !!LS.dqrs_levels;
   const levelMode = advMode || dqrsMode;   // pure level views: zones + pins only,
                                            // zero signal clutter, sniper untouched
   const wickMode = chartTab === 'wick03' || chartTab === 'wick04';  // 11 Oct 2026:
                                            // experimental paper tabs — own engine, own visuals
+  const btcTest = btcWickMode();           // BTC tab running a wick strategy
+  const testMode = wickMode || btcTest;    // any observe-only test surface
   let adv = null, dqrs = null;
   if (advMode) {
     const d1c = LS.closed_only(D1, nowMs);
@@ -1005,10 +1255,12 @@ function drawChart(nowMs){
     dqrs = LS.dqrs_levels(price0, D1, nowMs);
   }
   const pmap = LS.liquidity_map(price0, pools);   // only drawn pools set the axis
-  const act = wickMode ? wickActive() : (marketOpen(nowMs) ? activeSignal(nowMs) : null);
-  const allSig = wickMode ? wickSigs() : signalsToday.concat(swingSignalsToday);
+  const act = wickMode ? wickActive() : btcTest ? btcActive()
+    : (marketOpen(nowMs) ? activeSignal(nowMs) : null);
+  const allSig = wickMode ? wickSigs() : btcTest ? btcSigsFor()
+    : signalsToday.concat(swingSignalsToday);
   if (!levelMode) {
-    if (!wickMode) pmap.above.concat(pmap.below).forEach(p => consider(p.price));
+    if (!testMode) pmap.above.concat(pmap.below).forEach(p => consider(p.price));
     if(act){
       [act.entry, act.sl, act.tp, act.tp2, act.tp3].forEach(v => { if(v != null) consider(v); });
     }
@@ -1126,7 +1378,7 @@ function drawChart(nowMs){
                   : /(^|\+)PDL($|\+)/.test(z.src) ? '#ef4444' : '#b49aff',
     label: (z, major) => (major ? 'DQRS ★ ' : 'DQRS ') + z.src + ' · ' + z.price.toFixed(2),
   });
-  else if (!wickMode) {
+  else if (!testMode) {
     pmap.above.forEach(p => band(p, '239,68,68'));    // sell-side liquidity = red
     pmap.below.forEach(p => band(p, '34,197,94'));    // buy-side liquidity = green
   }
@@ -1152,8 +1404,8 @@ function drawChart(nowMs){
     if(live){ c.strokeRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1.5, Math.abs(yC - yO))); }
     else { c.fillStyle = col; c.fillRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1, Math.abs(yC - yO))); }
     if(entryIdx.has(i)){
-      // amber outline on wick tabs — test signals, not sniper signals
-      c.strokeStyle = wickMode ? '#f5a623' : '#3b82f6'; c.lineWidth = 2;
+      // amber outline on test tabs — test signals, not sniper signals
+      c.strokeStyle = testMode ? '#f5a623' : '#3b82f6'; c.lineWidth = 2;
       c.strokeRect(x - bw/2 - 2.5, y(k.h) - 1.5, bw + 5, y(k.l) - y(k.h) + 3);
       c.lineWidth = 1;
     }
@@ -1179,7 +1431,7 @@ function drawChart(nowMs){
   // Wick tabs get TEST-prefixed lines with an amber entry so a test plan
   // can never be mistaken for a sniper signal.
   if(act && !levelMode){
-    if (wickMode) {
+    if (testMode) {
       level(act.tp, '#22c55e', 'TEST TP');
       level(act.entry, '#f5a623', 'TEST EN', [7, 5]);
       level(act.sl, '#ef4444', 'TEST SL');
@@ -1223,8 +1475,8 @@ function drawChart(nowMs){
   } // end !levelMode — signal markers
   // WICK tabs: 200 EMA (blue, like the Pine plot) — the strategy's trend filter,
   // drawn from the per-TF map so M1/M5/M15 each get their own line
-  const wickEmaCur = wickMode ? wickEmaMap() : null;
-  if (wickMode && wickEmaCur && wickEmaCur.size){
+  const wickEmaCur = testMode ? (btcTest ? btcEma[TF] : wickEmaMap()) : null;
+  if (testMode && wickEmaCur && wickEmaCur.size){
     c.strokeStyle = '#3b82f6'; c.lineWidth = 1.6;
     c.beginPath();
     let started = false;
@@ -1859,6 +2111,7 @@ function rpCycleSpeed(){
 }
 function enterReplay(){
   if(replay || M1.length < 60) return;
+  if(chartTab === 'btc') return;   // replay is gold-M1 only
   rpPause();
   // start 30 candles before the latest signal — step forward and watch it print
   const allS = signalsToday.concat(swingSignalsToday);
@@ -1918,6 +2171,12 @@ async function boot(){
       const ltf = localStorage.getItem(LS_TF_KEY('wick03'));
       TF = (ltf && WICK03_TFS.includes(ltf)) ? ltf : 'M15';
     }
+    else if(chartTab === 'btc'){
+      const ltf = localStorage.getItem(LS_TF_KEY('btc'));
+      TF = (ltf && BTC_TFS.includes(ltf)) ? ltf : 'M15';
+      const ls = localStorage.getItem('liqscalp_btcstrat');
+      btcStrat = (ls === 'wick04' || ls === 'chart') ? ls : 'wick03';
+    }
     else {
       const ltf = localStorage.getItem(LS_TF_KEY(chartTab));
       if(ltf && TFS.includes(ltf)) TF = ltf;
@@ -1933,6 +2192,8 @@ async function boot(){
     err('Could not reach any price feed. Check your connection — or tap the top-bar label to retry.');
     return;
   }
+  // BTC tab restores its own Binance feed independently of the gold feed
+  if(chartTab === 'btc') ensureBtcFeed();
   setInterval(refreshHigherTFs, 5 * 60 * 1000);
   setInterval(() => paintClock(Date.now()), 1000);  // session countdown clock
   /* WS watchdog: silently-dead sockets (common on mobile) get force-reconnected,
@@ -1948,6 +2209,7 @@ async function boot(){
   }, 20000);
   document.addEventListener('visibilitychange', async () => {
     if(document.hidden) return;
+    if(chartTab === 'btc'){ btcResync(); return; }   // BTC feed is independent
     try {
       if(FEED === 'yahoo'){
         yahooFails = 0;
@@ -1987,11 +2249,13 @@ async function boot(){
   });
   document.querySelectorAll('.viewtab').forEach(b =>
     b.addEventListener('click', () => {
-      chartTab = b.dataset.view;   // sniper | adv | dqrs | wick03 | wick04 — signal engine untouched
+      chartTab = b.dataset.view;   // sniper | adv | dqrs | wick03 | wick04 | btc — signal engine untouched
       document.querySelectorAll('.viewtab').forEach(x =>
         x.classList.toggle('active', x === b));
       try{ localStorage.setItem('liqscalp_tab', chartTab); }catch(e){}
+      if (chartTab === 'btc' && replay) exitReplay();   // replay is gold-M1 only
       updateTfLock();
+      applyFeedLabel();   // BTC tab has its own feed label — refresh on every tab switch
       // wick04 is 15m-only — park it there. wick03 restores its own remembered
       // TF (M1/M5/M15); other tabs restore theirs (11 Oct 2026).
       if (chartTab === 'wick04') setTF('M15');
@@ -2001,12 +2265,28 @@ async function boot(){
         if (rtf && WICK03_TFS.includes(rtf) && rtf !== TF) setTF(rtf);
         else if (!WICK03_TFS.includes(TF)) setTF('M15');
       }
+      else if (chartTab === 'btc') {
+        ensureBtcFeed();   // lazy-start the Binance feed on first visit
+        let rtf = null;
+        try{ rtf = localStorage.getItem(LS_TF_KEY('btc')); }catch(e){}
+        if (rtf && BTC_TFS.includes(rtf) && rtf !== TF) setTF(rtf);
+        else if (!BTC_TFS.includes(TF)) setTF('M15');
+        else persistTF();   // no switch needed — still remember the current TF
+      }
       else {
         let rtf = null;
         try{ rtf = localStorage.getItem(LS_TF_KEY(chartTab)); }catch(e){}
         if (rtf && TFS.includes(rtf) && rtf !== TF) setTF(rtf);
       }
-      recompute();
+      if (chartTab === 'btc') { if (btcFeedOn) recomputeBtc(); }
+      else recompute();
+    }));
+  document.querySelectorAll('#stratbar .strat').forEach(b =>
+    b.addEventListener('click', () => {
+      btcStrat = b.dataset.strat;   // wick03 | wick04 | chart
+      try{ localStorage.setItem('liqscalp_btcstrat', btcStrat); }catch(e){}
+      updateStratbar();
+      if (chartTab === 'btc' && btcFeedOn) recomputeBtc();
     }));
   $('sndBtn').addEventListener('click', () => {
     soundOn = !soundOn;
