@@ -288,7 +288,7 @@
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
   <span id="updated">…</span></div>
 
-<script src="engine.js?v=15"></script>
+<script src="engine.js?v=16"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -363,7 +363,7 @@ function btcPrice(){
   return m.length ? m[m.length - 1].c : 0;
 }
 async function btcKlines(interval, limit){
-  const r = await fetch(`${BTC_API}/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
+  const r = await feedFetch(`${BTC_API}/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
   if(!r.ok) throw new Error('BTC HTTP ' + r.status);
   return (await r.json()).map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] }));
 }
@@ -577,8 +577,21 @@ function err(msg){
 }
 
 /* ---------------- feeds ---------------- */
+/* Hard timeout on every feed fetch (12 Oct 2026): a stalled request must
+   surface as a failure so the Yahoo→PAXG fallback chain can fire. Without
+   this, one hanging Yahoo fetch wedged bootFeeds()/yahooPoll() forever —
+   the 3-fail PAXG switch never fired and the page sat on "connecting"
+   with no recovery. AbortError is caught by the existing try/catch blocks
+   and treated like any other feed failure. */
+const FEED_TIMEOUT_MS = 20000;
+async function feedFetch(url){
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), FEED_TIMEOUT_MS);
+  try { return await fetch(url, { signal: c.signal }); }
+  finally { clearTimeout(t); }
+}
 async function yahooKlines(interval, range){
-  const r = await fetch(`${YAHOO}?interval=${interval}&range=${range}`);
+  const r = await feedFetch(`${YAHOO}?interval=${interval}&range=${range}`);
   if(!r.ok) throw new Error('Yahoo HTTP ' + r.status);
   const j = await r.json();
   const res = j.chart.result[0];
@@ -602,7 +615,7 @@ function resample4h(h1){
   return out;
 }
 async function paxgKlines(interval, limit){
-  const r = await fetch(`${PAXG_API}/api/v3/klines?symbol=PAXGUSDT&interval=${interval}&limit=${limit}`);
+  const r = await feedFetch(`${PAXG_API}/api/v3/klines?symbol=PAXGUSDT&interval=${interval}&limit=${limit}`);
   if(!r.ok) throw new Error('PAXG HTTP ' + r.status);
   return (await r.json()).map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4] }));
 }
@@ -897,12 +910,12 @@ function renderPanels(nowMs, h1c, h4c){
     setPanelClass(sp, cls + flash);
     const lbl = done.outcome === 'TP' ? '🎯 TP HIT'
       : tpWin ? `🎯 ${done.outcome} HIT` : lost ? '🛑 SL HIT' : '⌛ EXPIRED';
+    const rc = tpWin ? 'var(--green)' : lost ? 'var(--red)' : 'var(--dim)';
     $('vtext').textContent = lbl;
     setVmini(lbl, rc);
     plan.style.display = 'none';
     const kindTag = done.kind === 'swing' ? 'SWING ' : '';
     $('vsub').textContent = kindTag + done.direction + ' · ' + fmtT(Date.parse(done.signal_at)) + ' PKT · ' + done.session;
-    const rc = tpWin ? 'var(--green)' : lost ? 'var(--red)' : 'var(--dim)';
     const tpTxt = done.kind === 'swing'
       ? `TP1 ${done.tp.toFixed(2)}${done.tp2 ? ' · TP2 ' + done.tp2.toFixed(2) : ''}${done.tp3 ? ' · TP3 ' + done.tp3.toFixed(2) : ''}`
       : `TP ${done.tp.toFixed(2)}`;
@@ -1839,9 +1852,12 @@ function tvDown(){
   tvFails++; tvUrlIx++;
   setFresh('reconnecting');
   if(tvFails >= 3){
-    // TV test feed gave up — fall back to Yahoo, then PAXG, like any dead feed
+    // TV test feed gave up — fall back to Yahoo, then PAXG, like any dead feed.
+    // NOTE (12 Oct 2026): switchToPaxg() early-returns when FEED is already
+    // 'paxg', which would leave the PAXG socket/poll dead (stopFeeds killed
+    // them in connectTV). Null it first so the PAXG feed actually restarts.
     FEED = 'paxg';
-    attemptYahooNow().then(async ok => { if(!ok) await switchToPaxg(); });
+    attemptYahooNow().then(async ok => { if(!ok){ FEED = null; await switchToPaxg(); } });
     return;
   }
   setTimeout(() => { if(FEED === 'tv') tvConnect(); }, Math.min(15000, 2000 * tvFails));
