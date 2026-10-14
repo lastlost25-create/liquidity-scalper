@@ -294,14 +294,14 @@
 <script>
 'use strict';
 /* Live client-side Liquidity Scalper.
- * FEED: Yahoo Finance XAUUSD=X (spot composite, tracks Exness/OANDA within ~$1)
- *       — REST history + 20s polling. No key, no account.
+ * FEED: Yahoo Finance GC=F (COMEX gold futures, tracks spot within ~$2)
+ *       - REST history + 20s polling. No key, no account.
  *       Fallback: Binance PAXGUSDT public feed (websocket tick-live). No key.
  *       Test opt-in: TradingView OANDA:XAUUSD via unofficial chart websocket
  *       (tap the top-bar label to cycle feeds). No login.
  * ENGINE: engine.js — bit-for-bit port of the Python engine (verified 14/14
  *       identical signals on 5 test dates). Closed candles only, no repaint. */
-const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X';
+const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/GC=F';
 const PAXG_API = 'https://data-api.binance.vision';
 const PAXG_WS = 'wss://data-stream.binance.vision/ws/paxgusdt@kline_1m';
 const PKT = 'Asia/Karachi';
@@ -329,11 +329,22 @@ function wickActive(){
   const sigs = wickSigs().slice().sort((a, b) => Date.parse(b.signal_at) - Date.parse(a.signal_at));
   return sigs.find(s => !s.outcome) || sigs[0] || null;
 }
+/* WICK tally costs (12 Oct 2026): the live paper tally was gross R. Mickey's
+   standing rule judges strategies on NET after costs, so the same cost model
+   as the wick tournament is applied per trade: 0.02%/side + $0.50/fill on
+   1 oz/trade -> (0.0004*entry + 1.00) USD, divided by that trade's own risk.
+   Display-only: no signal logic touched. */
 function wickTally(sigs){
   const wins = sigs.filter(s => s.outcome && s.outcome.startsWith('TP')).length;
   const losses = sigs.filter(s => s.outcome === 'SL').length;
-  const net = sigs.reduce((a, s) => a + (s.r || 0), 0);
-  return { n: sigs.length, wins, losses, net: Math.round(net * 100) / 100 };
+  const resolved = sigs.filter(s => s.outcome && s.r != null);
+  const gross = resolved.reduce((a, s) => a + s.r, 0);
+  const costR = resolved.reduce((a, s) => {
+    const risk = Math.abs(s.entry - s.sl);
+    return risk ? a + (0.0004 * s.entry + 1.00) / risk : a;
+  }, 0);
+  const r2 = x => Math.round(x * 100) / 100;
+  return { n: sigs.length, wins, losses, gross: r2(gross), estNet: r2(gross - costR) };
 }
 /* BTCUSD paper-observation tab (Mickey, 11 Oct 2026): BTCUSDT via Binance
    public klines (no key). Same wick-rejection engine as the gold wick tabs
@@ -626,8 +637,8 @@ function applyFeedLabel(){
     return;
   }
   if(FEED === 'yahoo'){
-    $('symLabel').innerHTML = 'XAUUSD · ' + TF + ' <span style="opacity:.5">⇄</span>';
-    $('feedNote').textContent = 'XAUUSD spot via Yahoo Finance · close to Exness/OANDA · tap label to switch';
+    $('symLabel').innerHTML = 'GC=F · ' + TF + ' <span style="opacity:.5">⇄</span>';
+    $('feedNote').textContent = 'GC=F futures via Yahoo Finance · tracks spot within a few $ · tap label to switch';
   } else if(FEED === 'tv'){
     $('symLabel').innerHTML = 'TV · ' + TF + ' <span style="opacity:.5">⇄</span>';
     $('feedNote').textContent = 'TradingView OANDA:XAUUSD (TEST feed) · tap label to switch';
@@ -1057,8 +1068,8 @@ function renderWickPanels(nowMs){
   const wtf = wickTF();   // the TF this wick tab is actually running on
   const tag = chartTab === 'wick03' ? 'WICK 0.3' : 'WICK 0.4';
   const t = wickTally(sigs);
-  const netC = t.net >= 0 ? 'var(--green)' : 'var(--red)';
-  const tallyHtml = `📝 paper <b>${wtf}</b> · loaded history · ${t.n} sig · <span class="win">${t.wins}W</span>/<span class="loss">${t.losses}L</span> · net <b style="color:${netC}">${t.net >= 0 ? '+' : ''}${t.net}R</b>`;
+  const netC = t.estNet >= 0 ? 'var(--green)' : 'var(--red)';
+  const tallyHtml = `📝 paper <b>${wtf}</b> · loaded history · ${t.n} sig · <span class="win">${t.wins}W</span>/<span class="loss">${t.losses}L</span> · gross <b>${t.gross >= 0 ? '+' : ''}${t.gross}R</b> · est. net <b style="color:${netC}">${t.estNet >= 0 ? '+' : ''}${t.estNet}R</b> <span style="opacity:.55" title="0.02%/side + $0.50/fill, 1 oz/trade (tournament cost model)">(costs)</span>`;
   const sp = $('signalPanel'), plan = $('plan');
   const logH2 = document.querySelector('#logPanel h2');
   if (logH2 && logH2.firstChild) logH2.firstChild.textContent = 'Wick test log ';
@@ -1137,10 +1148,10 @@ function renderBtcPanels(nowMs){
   const act = btcActive();
   const tag = btcStrat === 'wick03' ? 'BTC WICK 0.3' : btcStrat === 'wick04' ? 'BTC WICK 0.4' : 'BTC CHART';
   const t = wickTally(sigs);
-  const netC = t.net >= 0 ? 'var(--green)' : 'var(--red)';
+  const netC = t.estNet >= 0 ? 'var(--green)' : 'var(--red)';
   const tallyHtml = btcStrat === 'chart'
     ? `📝 chart only · no strategy running`
-    : `📝 paper <b>${TF}</b> · loaded history · ${t.n} sig · <span class="win">${t.wins}W</span>/<span class="loss">${t.losses}L</span> · net <b style="color:${netC}">${t.net >= 0 ? '+' : ''}${t.net}R</b>`;
+    : `📝 paper <b>${TF}</b> · loaded history · ${t.n} sig · <span class="win">${t.wins}W</span>/<span class="loss">${t.losses}L</span> · gross <b>${t.gross >= 0 ? '+' : ''}${t.gross}R</b> · est. net <b style="color:${netC}">${t.estNet >= 0 ? '+' : ''}${t.estNet}R</b> <span style="opacity:.55" title="0.02%/side + $0.50/fill, 1 oz/trade (tournament cost model)">(costs)</span>`;
   const sp = $('signalPanel'), plan = $('plan');
   const logH2 = document.querySelector('#logPanel h2');
   if (logH2 && logH2.firstChild) logH2.firstChild.textContent = 'BTC test log ';
