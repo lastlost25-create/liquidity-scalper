@@ -135,6 +135,9 @@
   #flowWarn{background:rgba(60,38,4,.97);border:1px solid #f5a623;color:#ffd97a;
     font-size:11px;padding:7px 10px;border-radius:6px;margin-bottom:10px;text-align:center}
   #flowHead{display:flex;align-items:center;gap:10px;margin-bottom:10px;font-size:15px}
+  #flowChart{width:100%;height:240px;display:block;background:rgba(255,255,255,.02);
+    border:1px solid #333;border-radius:8px;margin-bottom:10px}
+  @media (max-width:700px){ #flowChart{height:210px} }
   #flowPrice{font-weight:800;font-size:20px}
   .fdot{width:10px;height:10px;border-radius:50%;display:inline-block}
   .fdot.live{background:#26a69a;box-shadow:0 0 6px #26a69a}
@@ -261,6 +264,7 @@
   <div id="flowWrap" style="display:none">
     <div id="flowWarn">⚠ TEST — Bitget <b>XAUUSDT perp</b> order flow · <b>NOT spot gold</b> · unproven read · observe only, never trade it live</div>
     <div id="flowHead"><span id="flowDot" class="fdot dead"></span><span id="flowPrice">–</span><span id="flowSpread" class="dim"></span><span id="flowErr" class="dim"></span></div>
+    <canvas id="flowChart"></canvas>
     <div id="flowVerdict"></div>
     <div id="flowPlan"></div>
     <div id="flowGates"></div>
@@ -333,7 +337,7 @@
   <span id="updated">…</span></div>
 
 <script src="engine.js?v=16"></script>
-<script src="flow.js?v=1"></script>
+<script src="flow.js?v=2"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
