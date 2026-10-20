@@ -377,7 +377,15 @@ function liquidity_map(price, pools, n = 5) {
     touches: z.touches, grade: z.grade, premium: z.premium,
     distance: round2(Math.abs(z.price - price)),
   });
-  return { above: above.map(row), below: below.map(row) };
+  // Tiny zones ride along separately (Mickey, 20 Oct 2026): the chart draws
+  // them faintly so every signal visibly sits on a level, but they stay out
+  // of above/below — the pools panel is unchanged, and they never stretch
+  // the chart axis. Nearest 4 per side is plenty for a faint backdrop.
+  const tinyZones = zones.filter(z => z.grade === 'tiny');
+  const tinyAbove = tinyZones.filter(z => z.price >= price).sort((a, b) => a.price - b.price).slice(0, 4);
+  const tinyBelow = tinyZones.filter(z => z.price < price).sort((a, b) => b.price - a.price).slice(0, 4);
+  return { above: above.map(row), below: below.map(row),
+           tinyAbove: tinyAbove.map(row), tinyBelow: tinyBelow.map(row) };
 }
 
 /* ----------------------------------------------------------------------------
