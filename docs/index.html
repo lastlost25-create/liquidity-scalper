@@ -42,6 +42,12 @@
        Only the header stays clickable, for collapse. */
     pointer-events:none}
   .panel > h2{pointer-events:auto;cursor:pointer}
+  /* FLOW tab has its own panel set — the sniper panels (Signal verdict,
+     Today's signals, Pools, Rules) must not ride along (Mickey, 20 Oct 2026:
+     "which tab gives us that signal?" — the 3 sniper signals were still
+     showing on the FLOW tab). flow.js toggles body.flow-on. */
+  body.flow-on #signalPanel, body.flow-on #poolPanel,
+  body.flow-on #logPanel, body.flow-on #rulesPanel{display:none!important}
   .panel h2{font-size:10px;color:var(--dim);text-transform:uppercase;
     letter-spacing:1px;margin-bottom:8px}
   #signalPanel{top:10px;left:10px;max-width:305px}
@@ -346,7 +352,7 @@
   <span id="updated">…</span></div>
 
 <script src="engine.js?v=16"></script>
-<script src="flow.js?v=4"></script>
+<script src="flow.js?v=5"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
