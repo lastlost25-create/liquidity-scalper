@@ -666,7 +666,7 @@ function setTF(tf){
    The footer shows the running build; 3s after load the page fetches its own
    URL bypassing cache and, if the served build differs, offers a one-tap
    update that reloads cache-busted. Bump BUILD on every deploy. */
-const BUILD = '20Oct-8';
+const BUILD = '20Oct-9';
 const $ = id => document.getElementById(id);
 (function buildGuard(){
   const stamp = $('buildStamp'); if(stamp) stamp.textContent = BUILD;
@@ -1621,11 +1621,16 @@ function drawChart(nowMs){
   }
 
   // swing-origin dots: a filled dot in the side color at the exact swing
-  // point each liquidity band was born from (drawn over the candles)
+  // point each liquidity band was born from (drawn over the candles).
+  // Halo + white ring so they pop off the candles (Mickey, 20 Oct 2026:
+  // "make the dot some more visible").
   for (const d of swingDots) {
-    c.beginPath(); c.arc(d.x, y(d.price), d.major ? 3.4 : 2.4, 0, Math.PI * 2);
+    const yy = y(d.price), r = d.major ? 5 : 3.6;
+    c.beginPath(); c.arc(d.x, yy, r * 2.1, 0, Math.PI * 2);
+    c.fillStyle = `rgba(${d.rgb},.18)`; c.fill();
+    c.beginPath(); c.arc(d.x, yy, r, 0, Math.PI * 2);
     c.fillStyle = `rgb(${d.rgb})`; c.fill();
-    c.strokeStyle = 'rgba(6,8,12,.85)'; c.lineWidth = 1; c.stroke(); c.lineWidth = 1;
+    c.strokeStyle = 'rgba(255,255,255,.9)'; c.lineWidth = 1.6; c.stroke(); c.lineWidth = 1;
   }
 
   const level = (v, color, label, dash) => {
