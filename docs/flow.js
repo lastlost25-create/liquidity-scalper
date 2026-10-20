@@ -36,6 +36,7 @@ let toxHist=[];
 let st={smooth:null, verdict:'WAIT', since:0, plan:null, last:null};
 let trend={dir:0, label:'Trend unknown'};
 let lastOut=null;
+let seed=new Map(), rzBound=false;   // chart history seed (Bitget REST 1m)
 
 const $=id=>document.getElementById(id);
 const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
@@ -225,6 +226,115 @@ async function refreshTrend(){
     }
   }catch(e){}
   trend={dir:0,label:'Trend unknown'};
+}
+
+// ================= chart: Bitget 1m history seed + live tape candles =================
+async function seedChart(){
+  try{
+    const r=await fetch('https://api.bitget.com/api/v2/mix/market/candles?symbol='+SYM+'&productType=USDT-FUTURES&granularity=1m&limit=240');
+    const j=await r.json();
+    for(const x of (j.data||[])){
+      const t=Math.floor(+x[0]/60000)*60;   // minute start, seconds (matches tape candles)
+      seed.set(t,{t,o:+x[1],h:+x[2],l:+x[3],c:+x[4],vol:+x[6]||0});
+    }
+    while(seed.size>300){const k=seed.keys().next().value;seed.delete(k);}
+  }catch(e){}
+}
+function chartSeries(){
+  const m=new Map(seed);
+  for(const c of candles.values())m.set(c.t,{t:c.t,o:c.o,h:c.h,l:c.l,c:c.c,vol:c.vol});
+  return [...m.values()].sort((a,b)=>a.t-b.t);
+}
+function drawFlowChart(d){
+  const cv=$('flowChart'); if(!cv)return;
+  const dpr=window.devicePixelRatio||1;
+  const Wd=cv.clientWidth, Hd=cv.clientHeight;
+  if(!Wd||!Hd)return;
+  const pw=Math.round(Wd*dpr), ph=Math.round(Hd*dpr);
+  if(cv.width!==pw||cv.height!==ph){cv.width=pw;cv.height=ph;}
+  const ctx=cv.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,Wd,Hd);
+  ctx.font='10px system-ui,sans-serif';
+  const cs=chartSeries().slice(-90);
+  if(!cs.length){
+    ctx.fillStyle='#888'; ctx.textAlign='center';
+    ctx.fillText('waiting for trades…',Wd/2,Hd/2);
+    ctx.textAlign='left'; return;
+  }
+  const AX=56, plotW=Wd-AX, plotH=Hd-14;
+  let mn=Infinity,mx=-Infinity,vmx=0;
+  for(const c of cs){mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);vmx=Math.max(vmx,c.vol||0);}
+  const va=valueArea();
+  if(va){mn=Math.min(mn,va.val);mx=Math.max(mx,va.vah);}
+  const T=d&&d.plan;
+  if(T){mn=Math.min(mn,T.stop,T.target,T.entry);mx=Math.max(mx,T.stop,T.target,T.entry);}
+  if(!(mx>mn))mx=mn+1;
+  const pad=(mx-mn)*0.08; mx+=pad; mn-=pad;
+  const Y=p=>6+(mx-p)/(mx-mn)*(plotH-12);
+  // grid + price labels
+  ctx.strokeStyle='rgba(255,255,255,.06)'; ctx.fillStyle='#888'; ctx.lineWidth=1;
+  for(let g=0;g<=4;g++){
+    const p=mn+(mx-mn)*g/4, y=Y(p);
+    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(plotW,y);ctx.stroke();
+    ctx.fillText(p.toFixed(2),plotW+5,y+3);
+  }
+  const slot=plotW/cs.length, bw=Math.max(1,slot*0.62);
+  // volume (subtle overlay at the bottom)
+  if(vmx>0){
+    const vh=plotH*0.16;
+    cs.forEach((c,idx)=>{
+      const hgt=(c.vol||0)/vmx*vh;
+      ctx.fillStyle=c.c>=c.o?'rgba(38,166,154,.35)':'rgba(239,83,80,.35)';
+      ctx.fillRect(idx*slot+0.5,plotH-hgt,Math.max(1,bw),hgt);
+    });
+  }
+  // value area lines
+  if(va){
+    const vaLine=(p,txt,col)=>{
+      if(p<mn||p>mx)return; const y=Y(p);
+      ctx.strokeStyle=col; ctx.setLineDash([2,3]);
+      ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(plotW,y);ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle=col; ctx.fillText(txt,3,y-2);
+    };
+    vaLine(va.vah,'VAH','rgba(200,200,200,.55)');
+    vaLine(va.poc,'POC','rgba(245,166,35,.85)');
+    vaLine(va.val,'VAL','rgba(200,200,200,.55)');
+  }
+  // candles
+  cs.forEach((c,idx)=>{
+    const x=idx*slot+slot/2, col=c.c>=c.o?'#26a69a':'#ef5350';
+    ctx.strokeStyle=col; ctx.fillStyle=col;
+    ctx.beginPath();ctx.moveTo(x,Y(c.h));ctx.lineTo(x,Y(c.l));ctx.stroke();
+    const y1=Y(Math.max(c.o,c.c)), y2=Y(Math.min(c.o,c.c));
+    ctx.fillRect(x-bw/2,y1,bw,Math.max(1,y2-y1));
+  });
+  // plan lines (entry / stop / target)
+  if(T){
+    const pLine=(p,txt,col,dash)=>{
+      if(p<mn||p>mx)return; const y=Y(p);
+      ctx.strokeStyle=col; ctx.setLineDash(dash);
+      ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(plotW,y);ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle=col; ctx.fillText(txt+' '+p.toFixed(2),3,y-2);
+    };
+    pLine(T.entry,'ENTRY','#4da3ff',[6,4]);
+    pLine(T.stop,'SL','#ef5350',[]);
+    pLine(T.target,'TP','#26a69a',[]);
+  }
+  // last price line + tag
+  const lp=cs[cs.length-1].c, ly=Y(lp);
+  ctx.strokeStyle='rgba(255,255,255,.45)'; ctx.setLineDash([4,4]);
+  ctx.beginPath();ctx.moveTo(0,ly);ctx.lineTo(plotW,ly);ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle='#e6eaf2'; ctx.fillRect(plotW+1,ly-8,AX-3,16);
+  ctx.fillStyle='#0a0e14'; ctx.fillText(lp.toFixed(2),plotW+5,ly+3);
+  // time labels (UTC)
+  ctx.fillStyle='#888';
+  const stepLbl=Math.max(1,Math.floor(cs.length/4));
+  cs.forEach((c,idx)=>{
+    if(idx%stepLbl)return;
+    const dt=new Date(c.t*1000);
+    ctx.fillText(String(dt.getUTCHours()).padStart(2,'0')+':'+String(dt.getUTCMinutes()).padStart(2,'0'),idx*slot+1,Hd-2);
+  });
 }
 
 // ================= the READ (ported from dom_decision.read) =================
@@ -625,10 +735,11 @@ function render(d,rd){
 function step(){
   if(!running)return;
   const rd=read();
-  if(!rd){render(null,null);return;}
+  if(!rd){render(null,null);drawFlowChart(null);return;}
   const d=decide(rd);
   lastOut={d,rd};
   render(d,rd);
+  drawFlowChart(d);
 }
 function start(){
   if(running)return;
@@ -636,6 +747,8 @@ function start(){
   applyTab(true);
   connect();
   refreshTrend();
+  seedChart();
+  if(!rzBound){rzBound=true;window.addEventListener('resize',()=>{if(running)drawFlowChart(lastOut?lastOut.d:null);});}
   t500=setInterval(frameTick,500);
   t1s=setInterval(step,1000);
   tWall=setInterval(wallsTick,2000);
