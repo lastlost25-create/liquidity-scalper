@@ -1117,9 +1117,12 @@ def liquidity_map(price, pools, n=5):
         cross = len({g["tf"] for g in group}) > 1
         grade = "major" if (cross or touches >= 3) else \
                 "minor" if (touches >= 2 or tfs == "H4") else "tiny"
+        # zone birth = earliest swing in the group (mirrors docs/engine.js)
+        fa = min((g["formed_at"] for g in group if g.get("formed_at") is not None),
+                 default=None)
         zones.append({"id": "+".join(g["id"] for g in group), "tf": tfs,
                       "side": p["side"], "price": zp, "touches": touches,
-                      "grade": grade, "premium": touches >= 2})
+                      "grade": grade, "premium": touches >= 2, "formed_at": fa})
     drawn = [z for z in zones if z["grade"] != "tiny"]
     above = sorted([z for z in drawn if z["price"] >= price], key=lambda z: z["price"])[:n]
     below = sorted([z for z in drawn if z["price"] < price], key=lambda z: z["price"], reverse=True)[:n]
@@ -1127,7 +1130,8 @@ def liquidity_map(price, pools, n=5):
         return {
             "id": z["id"], "tf": z["tf"], "side": z["side"],
             "price": z["price"], "touches": z["touches"], "grade": z["grade"],
-            "premium": z["premium"], "distance": round(abs(z["price"] - price), 2),
+            "premium": z["premium"], "formed_at": z.get("formed_at"),
+            "distance": round(abs(z["price"] - price), 2),
         }
     # Tiny zones ride along separately (Mickey, 20 Oct 2026) — mirrors
     # docs/engine.js: the chart draws them faintly; above/below unchanged.
