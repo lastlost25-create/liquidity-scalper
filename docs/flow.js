@@ -36,7 +36,10 @@ let toxHist=[];
 let st={smooth:null, verdict:'WAIT', since:0, plan:null, last:null};
 let trend={dir:0, label:'Trend unknown'};
 let lastOut=null;
-let seed=new Map(), rzBound=false;   // chart history seed (Bitget REST 1m)
+let seed=new Map(), rzBound=false, tfBound=false;   // chart history seed (Bitget REST)
+let flowTF='M1';                                     // FLOW chart timeframe (follows the TF bar)
+const FLOW_TF_MS={M1:60000,M5:300000,M15:900000,H1:3600000,H4:14400000,D1:86400000};
+const FLOW_TF_GRAN={M1:'1m',M5:'5m',M15:'15m',H1:'1H',H4:'4H',D1:'1D'};
 
 const $=id=>document.getElementById(id);
 const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
@@ -228,22 +231,39 @@ async function refreshTrend(){
   trend={dir:0,label:'Trend unknown'};
 }
 
-// ================= chart: Bitget 1m history seed + live tape candles =================
+// ================= chart: Bitget history seed (per-TF) + live tape candles =================
 async function seedChart(){
+  const tf=flowTF, ms=FLOW_TF_MS[tf];
   try{
-    const r=await fetch('https://api.bitget.com/api/v2/mix/market/candles?symbol='+SYM+'&productType=USDT-FUTURES&granularity=1m&limit=240');
+    const r=await fetch('https://api.bitget.com/api/v2/mix/market/candles?symbol='+SYM+'&productType=USDT-FUTURES&granularity='+FLOW_TF_GRAN[tf]+'&limit=200');
     const j=await r.json();
+    const m=new Map();
     for(const x of (j.data||[])){
-      const t=Math.floor(+x[0]/60000)*60;   // minute start, seconds (matches tape candles)
-      seed.set(t,{t,o:+x[1],h:+x[2],l:+x[3],c:+x[4],vol:+x[6]||0});
+      const t=Math.floor(+x[0]/ms)*ms/1000;   // bar start, seconds (matches tape candles)
+      m.set(t,{t,o:+x[1],h:+x[2],l:+x[3],c:+x[4],vol:+x[6]||0});
     }
-    while(seed.size>300){const k=seed.keys().next().value;seed.delete(k);}
+    if(tf===flowTF&&m.size){seed=m;drawFlowChart(lastOut?lastOut.d:null);}
   }catch(e){}
 }
 function chartSeries(){
-  const m=new Map(seed);
-  for(const c of candles.values())m.set(c.t,{t:c.t,o:c.o,h:c.h,l:c.l,c:c.c,vol:c.vol});
-  return [...m.values()].sort((a,b)=>a.t-b.t);
+  if(flowTF==='M1'){
+    const m=new Map(seed);
+    for(const c of candles.values())m.set(c.t,{t:c.t,o:c.o,h:c.h,l:c.l,c:c.c,vol:c.vol});
+    return [...m.values()].sort((a,b)=>a.t-b.t);
+  }
+  // higher TFs: seeded bars, with the forming bar patched/rolled from the 1m tape
+  const sec=FLOW_TF_MS[flowTF]/1000;
+  const out=[...seed.values()].sort((a,b)=>a.t-b.t);
+  const tape=[...candles.values()].sort((a,b)=>a.t-b.t);
+  for(const c of tape){
+    const bkt=Math.floor(c.t/sec)*sec, lastB=out[out.length-1];
+    if(lastB&&bkt===lastB.t){
+      lastB.h=Math.max(lastB.h,c.h); lastB.l=Math.min(lastB.l,c.l); lastB.c=c.c;
+    }else if(!lastB||bkt>lastB.t){
+      out.push({t:bkt,o:c.o,h:c.h,l:c.l,c:c.c,vol:c.vol});
+    }
+  }
+  return out;
 }
 function drawFlowChart(d){
   const cv=$('flowChart'); if(!cv)return;
@@ -333,7 +353,10 @@ function drawFlowChart(d){
   cs.forEach((c,idx)=>{
     if(idx%stepLbl)return;
     const dt=new Date(c.t*1000);
-    ctx.fillText(String(dt.getUTCHours()).padStart(2,'0')+':'+String(dt.getUTCMinutes()).padStart(2,'0'),idx*slot+1,Hd-2);
+    const s=flowTF==='D1'
+      ? dt.getUTCDate()+'/'+(dt.getUTCMonth()+1)
+      : String(dt.getUTCHours()).padStart(2,'0')+':'+String(dt.getUTCMinutes()).padStart(2,'0');
+    ctx.fillText(s,idx*slot+1,Hd-2);
   });
 }
 
@@ -747,12 +770,22 @@ function start(){
   applyTab(true);
   connect();
   refreshTrend();
+  // FLOW chart opens on whatever TF the bar shows, and follows TF taps
+  const actB=document.querySelector('#tfbar .tf.active');
+  flowTF=(actB&&FLOW_TF_MS[actB.dataset.tf])?actB.dataset.tf:'M1';
+  seed=new Map();
   seedChart();
+  if(!tfBound){tfBound=true;document.querySelectorAll('#tfbar .tf').forEach(b=>b.addEventListener('click',()=>{
+    if(!running)return;
+    const tf=b.dataset.tf;
+    if(!FLOW_TF_MS[tf]||tf===flowTF)return;
+    flowTF=tf; seed=new Map(); seedChart(); drawFlowChart(lastOut?lastOut.d:null);
+  }));}
   if(!rzBound){rzBound=true;window.addEventListener('resize',()=>{if(running)drawFlowChart(lastOut?lastOut.d:null);});}
   t500=setInterval(frameTick,500);
   t1s=setInterval(step,1000);
   tWall=setInterval(wallsTick,2000);
-  tTrend=setInterval(refreshTrend,5*60*1000);
+  tTrend=setInterval(()=>{refreshTrend();seedChart();},5*60*1000);
   step();
 }
 function stop(){
