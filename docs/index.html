@@ -2135,6 +2135,10 @@ function applyZoom(factor){
   let pinchD = 0, lastTap = 0, justReset = 0;
   let dragging = false, dragX = 0, dragY = 0, dragOff = 0, priceOff0 = 0, dragMode = null,
       downX = 0, downY = 0, downT = 0;
+  // MT5-style scrub (Mickey, 20 Oct 2026): while the inspector is ON, a touch
+  // drag moves the INSPECTOR across candles instead of panning the chart.
+  // Inspector off (double-tap clears it) -> drag pans as before.
+  let scrub = false;
   const pinchDist = () => { const [a, b] = [...touchPts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
   const candleW = () => Math.max(2, (cv.clientWidth - 68) / viewCount);
   const maxOff = () => Math.max(0, tfBars().length - viewCount);
@@ -2173,8 +2177,13 @@ function applyZoom(factor){
   cv.addEventListener('pointerdown', e => {
     const now = Date.now();
     downX = e.clientX; downY = e.clientY; downT = now;
-    if(e.pointerType !== 'mouse') XH.on = false;   // touch press starts pan/zoom — clear the inspector (mouse keeps hover)
-    if(now - lastTap < 300 && !dragging){ viewCount = tfViewCount(); viewOffset = 0; priceShift = 0; priceZoom = 1; zoomPrice = null; userZoomed = false; justReset = now; drawChart(now); }  // double-tap resets
+    const doubleTap = now - lastTap < 300 && !dragging;
+    // touch with the inspector on -> this drag scrubs the inspector (don't
+    // clear it); touch with it off -> pan/zoom as before. A double-tap is a
+    // reset, never a scrub, and it turns the inspector off.
+    scrub = e.pointerType !== 'mouse' && XH.on && !doubleTap;
+    if(e.pointerType !== 'mouse' && !scrub) XH.on = false;
+    if(doubleTap){ viewCount = tfViewCount(); viewOffset = 0; priceShift = 0; priceZoom = 1; zoomPrice = null; userZoomed = false; justReset = now; drawChart(now); }  // double-tap resets
     lastTap = now;
     // mouse stays out of the touch set: touchPts is ONLY for the two-finger
     // pinch. Letting the mouse in here lets a stale hover entry combine with
@@ -2192,11 +2201,14 @@ function applyZoom(factor){
       if(pinchD > 0 && d > 0) applyZoom(d / pinchD);
       pinchD = d;
     } else if(dragging){
-      // direction lock: mostly-horizontal -> time pan, mostly-vertical -> price pan
-      const dxm = e.clientX - dragX, dym = e.clientY - dragY;
-      if(!dragMode && Math.hypot(dxm, dym) > 10) dragMode = Math.abs(dxm) >= Math.abs(dym) ? 'h' : 'v';
-      XH.on = false;
-      if(dragMode === 'v') pricePan(e.clientY); else panTo(e.clientX);
+      if(scrub){ setXH(e.clientX, e.clientY); }   // inspector follows the finger
+      else {
+        // direction lock: mostly-horizontal -> time pan, mostly-vertical -> price pan
+        const dxm = e.clientX - dragX, dym = e.clientY - dragY;
+        if(!dragMode && Math.hypot(dxm, dym) > 10) dragMode = Math.abs(dxm) >= Math.abs(dym) ? 'h' : 'v';
+        XH.on = false;
+        if(dragMode === 'v') pricePan(e.clientY); else panTo(e.clientX);
+      }
     }
     else if(e.pointerType === 'mouse'){ setXH(e.clientX, e.clientY); }  // hover inspector (desktop)
   });
@@ -2207,7 +2219,7 @@ function applyZoom(factor){
       (Date.now() - justReset) > 350;
     touchPts.delete(e.pointerId);
     if(touchPts.size < 2) pinchD = 0;
-    if(touchPts.size === 0) endDrag();
+    if(touchPts.size === 0){ endDrag(); scrub = false; }
     if(tap) setXH(e.clientX, e.clientY);
   };
   cv.addEventListener('pointerup', pend);
