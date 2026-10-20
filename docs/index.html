@@ -666,7 +666,7 @@ function setTF(tf){
    The footer shows the running build; 3s after load the page fetches its own
    URL bypassing cache and, if the served build differs, offers a one-tap
    update that reloads cache-busted. Bump BUILD on every deploy. */
-const BUILD = '20Oct-9';
+const BUILD = '20Oct-10';
 const $ = id => document.getElementById(id);
 (function buildGuard(){
   const stamp = $('buildStamp'); if(stamp) stamp.textContent = BUILD;
@@ -1489,12 +1489,21 @@ function drawChart(nowMs){
     // starts at the candle whose swing created the level — it no longer
     // stretches back before the level existed — and a dot (drawn after the
     // candles, so it stays visible) marks the swing point itself.
-    let x0 = 0, dotX = null;
+    let x0 = 0, dotX = null, lx = 6;
     if (p.formed_at != null && candles.length && p.formed_at >= candles[0].t) {
       const cwB = pw / viewCount;
       x0 = candleIdx(candles, p.formed_at, tfMs) * cwB;
       dotX = x0 + cwB / 2;
-      swingDots.push({ x: dotX, price: p.price, rgb, major });
+      lx = dotX + 8;
+      swingDots.push({ x: dotX, price: p.price, rgb, major, ring: false });
+    } else {
+      // The swing is older than the visible window (the common case on a
+      // phone: ~4h of M1 candles, levels born hours/days earlier) — without
+      // this the level carried NO marker at all and the dots looked absent
+      // (Mickey, 20 Oct 2026). Pin a RING where the band enters the chart:
+      // filled dot = swing in view, ring = swing further back.
+      lx = 18;
+      swingDots.push({ x: 8, price: p.price, rgb, major, ring: true });
     }
     c.fillStyle = `rgba(${rgb},${major ? .16 : tiny ? .035 : .07})`;
     c.fillRect(x0, y1, pw - x0, y2 - y1);
@@ -1513,7 +1522,7 @@ function drawChart(nowMs){
     c.fillStyle = major ? '#f5c542' : tiny ? '#646e84' : '#8a93a8';
     const txt = (major ? 'MAJOR ' : '') + p.tf + (p.touches >= 2 ? ' ★×' + p.touches : '') +
                 (narrow ? ' ' + p.price.toFixed(0) : ' · ' + p.price.toFixed(2));
-    if(claimLabel(mid - 4)) c.fillText(txt, dotX != null ? dotX + 8 : 6, mid - 4);
+    if(claimLabel(mid - 4)) c.fillText(txt, lx, mid - 4);
     c.font = _f;
   };
   const price = price0;
@@ -1626,11 +1635,21 @@ function drawChart(nowMs){
   // "make the dot some more visible").
   for (const d of swingDots) {
     const yy = y(d.price), r = d.major ? 5 : 3.6;
-    c.beginPath(); c.arc(d.x, yy, r * 2.1, 0, Math.PI * 2);
-    c.fillStyle = `rgba(${d.rgb},.18)`; c.fill();
-    c.beginPath(); c.arc(d.x, yy, r, 0, Math.PI * 2);
-    c.fillStyle = `rgb(${d.rgb})`; c.fill();
-    c.strokeStyle = 'rgba(255,255,255,.9)'; c.lineWidth = 1.6; c.stroke(); c.lineWidth = 1;
+    if (d.ring) {
+      // older level: ring pinned at the chart's left edge
+      c.beginPath(); c.arc(d.x, yy, r, 0, Math.PI * 2);
+      c.fillStyle = `rgba(${d.rgb},.25)`; c.fill();
+      c.strokeStyle = `rgb(${d.rgb})`; c.lineWidth = 2; c.stroke();
+      c.beginPath(); c.arc(d.x, yy, r + 1.8, 0, Math.PI * 2);
+      c.strokeStyle = 'rgba(255,255,255,.35)'; c.lineWidth = 1; c.stroke(); c.lineWidth = 1;
+    } else {
+      // swing in view: halo + filled dot + white ring
+      c.beginPath(); c.arc(d.x, yy, r * 2.1, 0, Math.PI * 2);
+      c.fillStyle = `rgba(${d.rgb},.18)`; c.fill();
+      c.beginPath(); c.arc(d.x, yy, r, 0, Math.PI * 2);
+      c.fillStyle = `rgb(${d.rgb})`; c.fill();
+      c.strokeStyle = 'rgba(255,255,255,.9)'; c.lineWidth = 1.6; c.stroke(); c.lineWidth = 1;
+    }
   }
 
   const level = (v, color, label, dash) => {
