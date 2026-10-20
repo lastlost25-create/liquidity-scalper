@@ -329,6 +329,7 @@
       <thead><tr><th>TIME</th><th>DIR</th><th>ENTRY</th><th>R:R</th><th>RESULT</th></tr></thead>
       <tbody id="log"><tr><td colspan="5" class="empty">…</td></tr></tbody>
     </table>
+    <div style="font-size:9px;color:var(--dim);padding:4px 2px 0">Signals print at candle close = entry open · ⚡/⏱ = how long after that this page showed it · 👀 = page opened later</div>
     </div>
   </div>
 </div>
@@ -901,6 +902,16 @@ function recompute(){
   }
   if(justResolved) flashSig = justResolved;
   prevOutcomes = cur;
+  // record first-seen time per signal (live mode only — replay must not
+  // stamp fake shown-times onto historical signals)
+  if(!rp){
+    let dirty = false;
+    for(const s of allSigs){
+      const k = sigKey(s);
+      if(!(k in shownAt)){ shownAt[k] = Date.now(); dirty = true; }
+    }
+    if(dirty) saveShownAt();
+  }
   render(nowMs, m1c, h1c, h4c);
   if(saved) ({ M1, H1, H4, M5, M15, D1 } = saved);   // restore full stores after replay compute
 }
@@ -917,6 +928,36 @@ function sigKey(s){ return (s.kind || 'scalp') + '|' + s.signal_at; }
 
 let prevOutcomes = null;   // signal_at -> outcome; null until first compute
 let flashSig = null;       // signal_at of a just-resolved trade (pulse banner)
+
+/* Shown-timing (Mickey, 20 Oct 2026): the first real-time moment this page
+   surfaced each signal, so the Today Signals box can say how long after the
+   entry candle opened the signal actually appeared. signal_at IS the entry
+   candle's open = the sweep candle's close — a signal cannot exist before
+   that instant. Persisted per device; pruned after 3 days. */
+const SHOWN_KEY = 'liqscalp_shown_v1';
+let shownAt = (() => { try { return JSON.parse(localStorage.getItem(SHOWN_KEY) || '{}'); } catch(e){ return {}; } })();
+function saveShownAt(){
+  try {
+    const cut = Date.now() - 3 * 86400000;
+    for (const k in shownAt){ if (!(Date.parse(k.split('|')[1]) >= cut)) delete shownAt[k]; }
+    localStorage.setItem(SHOWN_KEY, JSON.stringify(shownAt));
+  } catch(e){}
+}
+const fmtDelay = ms => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return '+' + s + 's';
+  const m = Math.floor(s / 60);
+  if (m < 60) return '+' + m + 'm ' + String(s % 60).padStart(2, '0') + 's';
+  return '+' + Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+};
+function shownLine(x){
+  const sh = shownAt[sigKey(x)];
+  if (!sh) return '';
+  const d = sh - Date.parse(x.signal_at);
+  if (d <= 60000)  return `<div style="font-size:9px;color:var(--green)">⚡ shown ${fmtDelay(d)}</div>`;
+  if (d <= 180000) return `<div style="font-size:9px;color:#d9a441">⏱ shown ${fmtDelay(d)} late</div>`;
+  return `<div style="font-size:9px;color:var(--dim)">👀 first seen ${fmtDelay(d)}</div>`;
+}
 
 /* ---------------- panels ---------------- */
 function setCollapsed(panel, collapsed){
@@ -1075,7 +1116,7 @@ function renderPanels(nowMs, h1c, h4c){
     const ktag = x.kind === 'swing' ? '<span class="ktag">SWING</span> ' : '';
     const tps = x.kind === 'swing'
       ? `<div style="font-size:10px;color:var(--dim)">T2 ${x.tp2 ? x.tp2.toFixed(1) : '–'} · T3 ${x.tp3 ? x.tp3.toFixed(1) : '–'}</div>` : '';
-    return `<tr><td>${fmtT(Date.parse(x.signal_at))}</td><td class="${x.direction}">${ktag}${x.direction}</td>`
+    return `<tr><td>${fmtT(Date.parse(x.signal_at))}${shownLine(x)}</td><td class="${x.direction}">${ktag}${x.direction}</td>`
       + `<td>${x.entry.toFixed(2)}${tps}</td><td>1:${x.rr.toFixed(1)}</td><td>${oc}${held}</td></tr>`;
   }).join('') : '<tr><td colspan="5" class="empty">no signals yet today — strict filter, this is normal</td></tr>';
 
