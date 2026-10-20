@@ -153,6 +153,11 @@
   /* FLOW's own floating signal box (Mickey, 20 Oct 2026 — "like Sniper's"):
      verdict + plan floating over the FLOW chart's top-left, panel-styled,
      FLOW-labeled so it can never be confused with the sniper's Signal box. */
+  #updBar{position:fixed;left:10px;right:10px;bottom:10px;z-index:99;background:#12351f;
+    border:1px solid #22c55e;color:#d7ffe3;border-radius:10px;padding:10px 12px;
+    font-size:13px;text-align:center;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+  #updBar button{margin-left:8px;background:#22c55e;color:#04150a;border:none;border-radius:6px;
+    padding:6px 12px;font-weight:800;cursor:pointer}
   #flowChartWrap{position:relative}
   #flowSignal{position:absolute;top:8px;left:8px;z-index:6;max-width:330px;pointer-events:none;
     background:rgba(13,18,27,.92);border:1px solid var(--line);border-radius:10px;
@@ -365,8 +370,9 @@
 </div>
 
 <div id="foot">⚠️ Educational only — not financial advice · <span id="feedNote">connecting…</span> ·
-  <span id="updated">…</span></div>
+  <span id="updated">…</span> · build <span id="buildStamp">?</span></div>
 
+<div id="updBar" style="display:none">🔄 A newer version of this page is ready <button id="updBtn" type="button">UPDATE NOW</button></div>
 <script src="engine.js?v=16"></script>
 <script src="flow.js?v=5"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
@@ -650,7 +656,27 @@ function setTF(tf){
   render(nowMs, m1c, h1c, h4c);
 }
 
+/* Build stamp + stale-cache guard (20 Oct 2026): GitHub Pages serves this
+   page with a 10-minute cache, so a phone can keep running an old copy after
+   a fix ships (bit us repeatedly — "still not working" on a fixed page).
+   The footer shows the running build; 3s after load the page fetches its own
+   URL bypassing cache and, if the served build differs, offers a one-tap
+   update that reloads cache-busted. Bump BUILD on every deploy. */
+const BUILD = '20Oct-5';
 const $ = id => document.getElementById(id);
+(function buildGuard(){
+  const stamp = $('buildStamp'); if(stamp) stamp.textContent = BUILD;
+  const btn = $('updBtn');
+  if(btn) btn.addEventListener('click', () => location.replace(location.pathname + '?b=' + Date.now()));
+  setTimeout(async () => {
+    try {
+      const res = await fetch(location.pathname + '?chk=' + Date.now(), { cache: 'no-store' });
+      if(!res.ok) return;
+      const m = (await res.text()).match(/const BUILD = '([^']+)'/);
+      if(m && m[1] !== BUILD){ const bar = $('updBar'); if(bar) bar.style.display = 'block'; }
+    } catch(_){ /* offline or blocked — stay silent */ }
+  }, 3000);
+})();
 const fmtT = ms => new Date(ms).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:PKT});
 const fmtD = ms => new Date(ms).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:PKT});
 const fmtHeld = ms => {   // "47m", "1h 23m", "2d 4h" — how long a trade took
