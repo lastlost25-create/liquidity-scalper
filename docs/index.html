@@ -263,10 +263,12 @@
        TEST ONLY — Bitget XAUUSDT perp order flow, not spot, unproven -->
   <div id="flowWrap" style="display:none">
     <div id="flowWarn">⚠ TEST — Bitget <b>XAUUSDT perp</b> order flow · <b>NOT spot gold</b> · unproven read · observe only, never trade it live</div>
+    <div id="flowBacktest" style="background:rgba(60,38,4,.97);color:#ffd9a0;border:1px solid #8a6414;border-radius:6px;padding:6px 8px;margin:6px 0;font-size:11px;line-height:1.45">🧪 <b>BACKTEST — FAILED</b> (decision brain, GC=F M5, 60 days, real volume, 375 signals): accuracy <b>33.5%</b> vs 32.8% breakeven · win rate 28.6% · <b>−0.41R/trade</b> net of costs. The live tape engine below can't be backtested (no historical tape exists) — its <b>live paper tally</b> is the forward test. Judge at 100+ resolved, net positive, per the standing process.</div>
     <div id="flowHead"><span id="flowDot" class="fdot dead"></span><span id="flowPrice">–</span><span id="flowSpread" class="dim"></span><span id="flowErr" class="dim"></span></div>
     <canvas id="flowChart"></canvas>
     <div id="flowVerdict"></div>
     <div id="flowPlan"></div>
+    <div id="flowPaper" style="font-size:11px;color:var(--dim);padding:2px 0"></div>
     <div id="flowGates"></div>
     <div id="flowFactors"></div>
     <div id="flowLevels"></div>
@@ -338,7 +340,7 @@
   <span id="updated">…</span></div>
 
 <script src="engine.js?v=16"></script>
-<script src="flow.js?v=3"></script>
+<script src="flow.js?v=4"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
