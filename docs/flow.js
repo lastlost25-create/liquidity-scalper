@@ -843,6 +843,9 @@ function applyTab(on){
   const w=$('flowWrap'),c=$('chartWrap');
   if(w)w.style.display=on?'block':'none';
   if(c)c.style.display=on?'none':'block';
+  // hide the sniper tab's panels while FLOW is on (CSS: body.flow-on) —
+  // they belong to the sniper chart, not to this tab
+  document.body.classList.toggle('flow-on',on);
 }
 function isOn(){return running;}
 
