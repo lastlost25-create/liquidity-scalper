@@ -360,6 +360,46 @@ function drawFlowChart(d){
   });
 }
 
+// ================= live paper tally (forward test, 20 Oct 2026) =================
+// The tape engine has no historical data, so it can never be backtested —
+// this tally is its only honest scoreboard. Every fresh plan the engine
+// prints is recorded (this device, localStorage) and resolved against the
+// live price: TP = +netRr (the plan's own net-of-costs R), SL = -1R,
+// verdict abandoning/replacing an unsettled plan = FLAT at market minus costs.
+const PAPER_KEY='liqscalp_flow_paper_v1';
+let paper=(()=>{try{return JSON.parse(localStorage.getItem(PAPER_KEY)||'null')||{n:0,tp:0,sl:0,flat:0,netR:0,open:null};}catch(e){return{n:0,tp:0,sl:0,flat:0,netR:0,open:null};}})();
+function paperSave(){try{localStorage.setItem(PAPER_KEY,JSON.stringify(paper));}catch(e){}}
+function paperFlat(o,px){
+  const risk=Math.abs(o.entry-o.stop); if(!(risk>0)){paper.open=null;paperSave();return;}
+  const gross=o.side*(px-o.entry)/risk, costR=(o.entry*2*BASE_COST_BP/10000)/risk;
+  paper.flat++; paper.netR+=gross-costR; paper.open=null; paperSave();
+}
+function paperOpen(side,T,now){
+  if(!T)return;
+  if(paper.open)paperFlat(paper.open,T.entry);
+  paper.n++;
+  paper.open={side,entry:T.entry,stop:T.stop,target:T.target,netRr:T.netRr,t:now};
+  paperSave();
+}
+function paperTick(hiPx,loPx){
+  const o=paper.open; if(!o||!hiPx||!loPx)return;
+  if(o.side>0?loPx<=o.stop:hiPx>=o.stop){paper.sl++;paper.netR-=1;paper.open=null;paperSave();}
+  else if(o.side>0?hiPx>=o.target:loPx<=o.target){paper.tp++;paper.netR+=o.netRr;paper.open=null;paperSave();}
+}
+function paperText(){
+  const judged=paper.tp+paper.sl;
+  const acc=judged?(100*paper.tp/judged).toFixed(0)+'%':'—';
+  let s='📝 <b>live paper tally</b> (tape engine, this device): '+paper.n+' signals · '
+    +paper.tp+' TP / '+paper.sl+' SL / '+paper.flat+' flat · accuracy '+acc
+    +' · net <b>'+(paper.netR>=0?'+':'')+paper.netR.toFixed(1)+'R</b>'
+    +' · judge at 100+ resolved (now '+judged+')';
+  if(paper.open){
+    const o=paper.open;
+    s+='<br>open: '+(o.side>0?'LONG ':'SHORT ')+o.entry.toFixed(2)+' → TP '+o.target.toFixed(2)+' / SL '+o.stop.toFixed(2);
+  }
+  return s;
+}
+
 // ================= the READ (ported from dom_decision.read) =================
 function winStats(ms){
   const now=Date.now();let b=0,s=0,act=0,first=null,lastF=null;
@@ -685,7 +725,7 @@ function decide(rd){
   const H=T?clamp((T.netRr-1)/1.5,0,1):0;
   const conf=Math.round(100*(0.35*V+0.2*rd.agreement+0.2*rd.activity+0.15*ne+0.1*H));
   const since=(L===st.verdict&&st.since)?st.since:now;
-  if(L!=='WAIT'&&!keep&&!S)st.last={side:i,t:now,plan:T,ended:null,endedAt:0};
+  if(L!=='WAIT'&&!keep&&!S){st.last={side:i,t:now,plan:T,ended:null,endedAt:0};paperOpen(i,T,now);}
   if(st.last&&!st.last.ended&&st.last.plan){
     if(stopped(st.last.plan)){st.last.ended='stop';st.last.endedAt=now;}
     else if(hit(st.last.plan)){st.last.ended='target';st.last.endedAt=now;}
@@ -716,6 +756,8 @@ function render(d,rd){
       +(d.waitReason&&d.verdict==='WAIT'?'<div class="fv-w">'+esc(d.waitReason)+'</div>':'')
       +'</div>';
   }
+  const pp=$('flowPaper');
+  if(pp)pp.innerHTML=paperText();
   const pl=$('flowPlan');
   if(pl){
     const T=d&&d.plan;
@@ -760,6 +802,7 @@ function step(){
   const rd=read();
   if(!rd){render(null,null);drawFlowChart(null);return;}
   const d=decide(rd);
+  paperTick(Math.max(rd.price,last||0),Math.min(rd.price,last||Infinity));
   lastOut={d,rd};
   render(d,rd);
   drawFlowChart(d);
