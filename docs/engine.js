@@ -366,8 +366,12 @@ function liquidity_map(price, pools, n = 5) {
     const crossTF = new Set(group.map(g => g.tf)).size > 1;
     const grade = (crossTF || touches >= 3) ? 'major'
                 : (touches >= 2 || tfs === 'H4') ? 'minor' : 'tiny';
+    // zone birth = the EARLIEST swing in the group (ms): the chart starts
+    // each band at its swing and dots the point (Mickey, 20 Oct 2026).
+    const fa = Math.min(...group.map(g => g.formed_at != null ? g.formed_at : Infinity));
     zones.push({ id: group.map(g => g.id).join('+'), tf: tfs, side: p.side,
-                 price: zp, touches, grade, premium: touches >= 2 });
+                 price: zp, touches, grade, premium: touches >= 2,
+                 formed_at: isFinite(fa) ? fa : null });
   }
   const drawn = zones.filter(z => z.grade !== 'tiny');
   const above = drawn.filter(z => z.price >= price).sort((a, b) => a.price - b.price).slice(0, n);
@@ -375,6 +379,7 @@ function liquidity_map(price, pools, n = 5) {
   const row = z => ({
     id: z.id, tf: z.tf, side: z.side, price: z.price,
     touches: z.touches, grade: z.grade, premium: z.premium,
+    formed_at: z.formed_at != null ? z.formed_at : null,
     distance: round2(Math.abs(z.price - price)),
   });
   // Tiny zones ride along separately (Mickey, 20 Oct 2026): the chart draws
