@@ -377,7 +377,7 @@
   <span id="updated">…</span> · build <span id="buildStamp">?</span></div>
 
 <div id="updBar" style="display:none">🔄 A newer version of this page is ready <button id="updBtn" type="button">UPDATE NOW</button></div>
-<script src="engine.js?v=16"></script>
+<script src="engine.js?v=17"></script>
 <script src="flow.js?v=5"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
@@ -666,7 +666,7 @@ function setTF(tf){
    The footer shows the running build; 3s after load the page fetches its own
    URL bypassing cache and, if the served build differs, offers a one-tap
    update that reloads cache-busted. Bump BUILD on every deploy. */
-const BUILD = '20Oct-6';
+const BUILD = '20Oct-7';
 const $ = id => document.getElementById(id);
 (function buildGuard(){
   const stamp = $('buildStamp'); if(stamp) stamp.textContent = BUILD;
@@ -1481,20 +1481,24 @@ function drawChart(nowMs){
   };
   const band = (p, rgb) => {
     const major = p.grade === 'major';
-    const half = major ? .30 : .18;                 // major zones are taller
+    const tiny = p.grade === 'tiny';
+    const half = major ? .30 : tiny ? .12 : .18;    // major zones are taller
     const y1 = y(p.price + half), y2 = y(p.price - half), mid = (y1 + y2) / 2;
-    c.fillStyle = `rgba(${rgb},${major ? .16 : .07})`;
+    c.fillStyle = `rgba(${rgb},${major ? .16 : tiny ? .035 : .07})`;
     c.fillRect(0, y1, pw, y2 - y1);
     if (major) {                                     // solid bright edge
       c.strokeStyle = `rgb(${rgb})`; c.lineWidth = 1.6;
       c.beginPath(); c.moveTo(0, mid); c.lineTo(pw, mid); c.stroke(); c.lineWidth = 1;
+    } else if (tiny) {                               // faint dotted edge
+      c.strokeStyle = `rgba(${rgb},.30)`; c.setLineDash([2, 4]);
+      c.beginPath(); c.moveTo(0, mid); c.lineTo(pw, mid); c.stroke(); c.setLineDash([]);
     } else {                                         // thin dashed edge
       c.strokeStyle = 'rgba(107,116,136,.55)'; c.setLineDash([4, 4]);
       c.beginPath(); c.moveTo(0, mid); c.lineTo(pw, mid); c.stroke(); c.setLineDash([]);
     }
     const _f = c.font;
-    c.font = (major ? '700 11px' : '500 10px') + ' system-ui';
-    c.fillStyle = major ? '#f5c542' : '#8a93a8';
+    c.font = (major ? '700 11px' : tiny ? '500 9px' : '500 10px') + ' system-ui';
+    c.fillStyle = major ? '#f5c542' : tiny ? '#646e84' : '#8a93a8';
     const txt = (major ? 'MAJOR ' : '') + p.tf + (p.touches >= 2 ? ' ★×' + p.touches : '') +
                 (narrow ? ' ' + p.price.toFixed(0) : ' · ' + p.price.toFixed(2));
     if(claimLabel(mid - 4)) c.fillText(txt, 6, mid - 4);
@@ -1558,6 +1562,11 @@ function drawChart(nowMs){
     label: (z, major) => (major ? 'DQRS ★ ' : 'DQRS ') + z.src + ' · ' + z.price.toFixed(2),
   });
   else if (!testMode) {
+    // tiny levels first, as a faint backdrop (Mickey, 20 Oct 2026 — every
+    // signal should visibly sit on a level). In-range only: they never set
+    // the axis, so an out-of-range tiny band is simply skipped.
+    (pmap.tinyAbove || []).forEach(p => { if (p.price >= lo && p.price <= hi) band(p, '239,68,68'); });
+    (pmap.tinyBelow || []).forEach(p => { if (p.price >= lo && p.price <= hi) band(p, '34,197,94'); });
     pmap.above.forEach(p => band(p, '239,68,68'));    // sell-side liquidity = red
     pmap.below.forEach(p => band(p, '34,197,94'));    // buy-side liquidity = green
   }
