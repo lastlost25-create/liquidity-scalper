@@ -35,7 +35,13 @@
   #chart{position:absolute;inset:0;touch-action:none}
   .panel{position:absolute;background:rgba(13,18,27,.92);border:1px solid var(--line);
     border-radius:10px;padding:10px 12px;z-index:10;backdrop-filter:blur(3px);
-    font-size:12px;box-shadow:0 4px 18px rgba(0,0,0,.45)}
+    font-size:12px;box-shadow:0 4px 18px rgba(0,0,0,.45);
+    /* the chart owns the surface: panels are readouts, so hover/drag/tap
+       pass through to the canvas (Mickey, 20 Oct 2026 — the panels were
+       eating the candle inspector over the older candles on the left).
+       Only the header stays clickable, for collapse. */
+    pointer-events:none}
+  .panel > h2{pointer-events:auto;cursor:pointer}
   .panel h2{font-size:10px;color:var(--dim);text-transform:uppercase;
     letter-spacing:1px;margin-bottom:8px}
   #signalPanel{top:10px;left:10px;max-width:305px}
@@ -1508,11 +1514,13 @@ function drawChart(nowMs){
   // candle width is anchored to the zoom level (viewCount), NOT the drawn count —
   // so a chart-shift (fewer drawn bars) leaves blank space instead of stretching.
   const n = candles.length, cw = pw / viewCount;
-  // entry-candle indices for today's signals (blue outline) — mapped to the
-  // candle containing the signal time on the current timeframe
-  const entryIdx = new Set();
+  // entry-candle indices for today's signals, with direction (Mickey,
+  // 20 Oct 2026): outline GREEN for a LONG entry candle, RED for SHORT —
+  // mapped to the candle containing the signal time on the current timeframe
+  const entryIdx = new Map();
   if (!levelMode) for(const s of allSig){
-    entryIdx.add(candleIdx(candles, Date.parse(s.signal_at), tfMs));
+    const ix = candleIdx(candles, Date.parse(s.signal_at), tfMs);
+    if(!entryIdx.has(ix)) entryIdx.set(ix, s.direction);
   }
   for(let i = 0; i < n; i++){
     const k = candles[i];
@@ -1525,8 +1533,9 @@ function drawChart(nowMs){
     if(live){ c.strokeRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1.5, Math.abs(yC - yO))); }
     else { c.fillStyle = col; c.fillRect(x - bw/2, Math.min(yO, yC), bw, Math.max(1, Math.abs(yC - yO))); }
     if(entryIdx.has(i)){
-      // amber outline on test tabs — test signals, not sniper signals
-      c.strokeStyle = testMode ? '#f5a623' : '#3b82f6'; c.lineWidth = 2;
+      // amber outline on test tabs — test signals, not sniper signals.
+      // Sniper: green outline = LONG entry, red outline = SHORT entry.
+      c.strokeStyle = testMode ? '#f5a623' : entryIdx.get(i) === 'LONG' ? '#22c55e' : '#ef4444'; c.lineWidth = 2;
       c.strokeRect(x - bw/2 - 2.5, y(k.h) - 1.5, bw + 5, y(k.l) - y(k.h) + 3);
       c.lineWidth = 1;
     }
