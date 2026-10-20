@@ -36,11 +36,15 @@
   .panel{position:absolute;background:rgba(13,18,27,.92);border:1px solid var(--line);
     border-radius:10px;padding:10px 12px;z-index:10;backdrop-filter:blur(3px);
     font-size:12px;box-shadow:0 4px 18px rgba(0,0,0,.45);
-    /* the chart owns the surface: panels are readouts, so hover/drag/tap
-       pass through to the canvas (Mickey, 20 Oct 2026 — the panels were
-       eating the candle inspector over the older candles on the left).
-       Only the header stays clickable, for collapse. */
-    pointer-events:none}
+    /* the chart owns the surface under the Signal verdict box: it is a pure
+       readout over the older candles, so hover/drag/tap pass through to the
+       canvas (Mickey, 20 Oct 2026 — the box was eating the candle inspector).
+       Only its header stays clickable, for collapse. Applied via
+       #signalPanel below — the SCROLLABLE panels (Today's signals, Pools,
+       Rules) keep their events or their lists cannot scroll (his catch,
+       same day). */
+    }
+  #signalPanel{pointer-events:none}
   .panel > h2{pointer-events:auto;cursor:pointer}
   /* FLOW tab has its own panel set — the sniper panels (Signal verdict,
      Today's signals, Pools, Rules) must not ride along (Mickey, 20 Oct 2026:
@@ -662,7 +666,7 @@ function setTF(tf){
    The footer shows the running build; 3s after load the page fetches its own
    URL bypassing cache and, if the served build differs, offers a one-tap
    update that reloads cache-busted. Bump BUILD on every deploy. */
-const BUILD = '20Oct-5';
+const BUILD = '20Oct-6';
 const $ = id => document.getElementById(id);
 (function buildGuard(){
   const stamp = $('buildStamp'); if(stamp) stamp.textContent = BUILD;
