@@ -82,7 +82,7 @@ CONFIG = {
     "swing_sl_buffer": 1.00,                # swing stops sit $1 beyond the extreme (Mickey: 8-10 pip SL, corrected 5 Oct 2026)
     "swing_v2_sl": 2.50,                   # v2 sniper SL: fixed $2.50 from entry (his real $2.16, 6 Oct 2026)
     "swing_v2_pool_once": False,          # re-sweeps of the same pool may fire (backtest 6 Oct 2026: +3.94R vs +3.16R)
-    "swing_v2_min_risk": 0.0,             # min $ risk per signal; 0 = off (filters noise-tight stops)
+    "swing_v2_min_risk": 0.30,            # min $ risk per signal; 7 Oct 2026: filters untradeable sub-spread stops (backtest 189 trades, +4.547R/trade vs 193/+5.464R with 4 phantom lottery tickets)
     "swing_v2_rank": "rr",                # final daily pick: "rr" (top-RR first) or "time" (chronological)
     "swing_v2_pd_filter": False,        # StockLearners 6 Oct 2026: premium/discount filter —
                                        # SHORT only above the day-range 50% (premium),
@@ -416,6 +416,26 @@ def build_signals(m1, pools, cfg=CONFIG, now=None, date_filter=None,
 # ----------------------------------------------------------------------------
 # OUTCOME TRACKING — forward-walk M1 after entry: TP or SL first?
 # ----------------------------------------------------------------------------
+def peak_profit_r(signal, m1_after, closed_at):
+    """
+    Peak favorable excursion in R multiples — the most profit the trade showed
+    before it closed. Measured over bars up to and including the closing bar.
+    Exact port of docs/engine.js peak_profit_r.
+    """
+    risk = abs(signal["entry"] - signal["sl"])
+    if not (risk > 0) or closed_at is None:
+        return None
+    peak = 0.0
+    for ts, c in m1_after.iterrows():
+        if ts > closed_at:
+            break
+        hi, lo = float(c["high"]), float(c["low"])
+        fav = ((hi - signal["entry"]) / risk if signal["direction"] == "LONG"
+               else (signal["entry"] - lo) / risk)
+        peak = max(peak, fav)
+    return round(peak, 2)
+
+
 def track_outcome(signal, m1_after, max_hold_hours=24):
     """
     Walk forward through M1 candles after entry. First touch wins.
@@ -443,6 +463,7 @@ def track_outcome(signal, m1_after, max_hold_hours=24):
                 "outcome": "TP" if won else "SL",
                 "r": round(r, 2),
                 "closed_at": ts.isoformat(),
+                "peak_r": peak_profit_r(signal, m1_after, ts),
             }
     # Expired only if the deadline actually passed inside the data.
     # A trade that hasn't hit TP/SL with time left is OPEN (None), not expired.
@@ -454,7 +475,8 @@ def track_outcome(signal, m1_after, max_hold_hours=24):
     else:
         exit_ts, exit_px = m1_after.index[0], float(m1_after.iloc[0]["close"])
     r = (exit_px - entry) / abs(entry - sl) if direction == "LONG" else (entry - exit_px) / abs(entry - sl)
-    return {"outcome": "EXPIRED", "r": round(r, 2), "closed_at": exit_ts.isoformat()}
+    return {"outcome": "EXPIRED", "r": round(r, 2), "closed_at": exit_ts.isoformat(),
+            "peak_r": peak_profit_r(signal, m1_after, exit_ts)}
 
 
 def detect_daily_levels(d1, now, max_age_days=20):
@@ -844,7 +866,7 @@ def build_swing_signals(m1, swings, cfg=CONFIG, now=None, date_filter=None):
 
 
 def build_swing_signals_v2(m1, pools, cfg=CONFIG, now=None, date_filter=None,
-                           pdl=None, pdh=None, sl_mode="fixed"):
+                           pdl=None, pdh=None, sl_mode="fixed", dopen=None):
     """
     Screenshot-faithful "sniper" swing setup, calibrated 6 Oct 2026 from
     Mickey's real OANDA trade (Oct 6 2026: LONG 4114.911, SL 4112.755,
@@ -855,8 +877,8 @@ def build_swing_signals_v2(m1, pools, cfg=CONFIG, now=None, date_filter=None,
     Entry: next M1 open (the reclaim). No confirmation / break candles.
     SL: sl_mode="fixed" -> entry -/+ cfg["swing_v2_sl"] ($2.50 ~ his $2.16);
         sl_mode="extreme" -> sweep extreme +/- $0.40 (scalp-style).
-    TP1/TP2/TP3: nearest three opposing levels from pools + PDL/PDH
-        (his TP1 was the previous-day low).
+    TP1/TP2/TP3: nearest three opposing levels from pools + PDL/PDH + daily
+        open (his TP1 was the previous-day low; daily open added 7 Oct 2026).
     RR gate on TP1 >= min_rr. Killzones, 4/day cap, one signal per pool/day.
     Returns (signals, stats). Signal dicts match the v1 shape so the same
     track_swing_outcome scorer applies.
@@ -922,6 +944,14 @@ def build_swing_signals_v2(m1, pools, cfg=CONFIG, now=None, date_filter=None,
                 cands.append(float(pdl))
             if not red and pdh is not None and pdh > entry:
                 cands.append(float(pdh))
+            # Daily-open target (7 Oct 2026, StockLearners video 3 — backtested
+            # +4.357R -> +5.462R/trade as a TP level; as an entry trigger it
+            # loses money, so it joins the TP candidates only, never the
+            # sweep pools).
+            if red and dopen is not None and dopen < entry:
+                cands.append(float(dopen))
+            if not red and dopen is not None and dopen > entry:
+                cands.append(float(dopen))
             cands = sorted(set(round(c, 2) for c in cands), reverse=red)[:3]
             if not cands:
                 stats["no_tp"] = stats.get("no_tp", 0) + 1
@@ -1042,9 +1072,11 @@ def track_swing_outcome(signal, m1_after, max_hold_hours=48):
                     closed_at = ts
     if best > 0:
         return {"outcome": f"TP{best}", "r": rrs[best - 1],
-                "closed_at": closed_at.isoformat()}
+                "closed_at": closed_at.isoformat(),
+                "peak_r": peak_profit_r(signal, m1_after, closed_at)}
     if stopped:
-        return {"outcome": "SL", "r": -1.0, "closed_at": closed_at.isoformat()}
+        return {"outcome": "SL", "r": -1.0, "closed_at": closed_at.isoformat(),
+                "peak_r": peak_profit_r(signal, m1_after, closed_at)}
     if len(m1_after) == 0:
         return {"outcome": None, "r": None}
     # Expired only if the deadline actually passed inside the data.
@@ -1057,7 +1089,8 @@ def track_swing_outcome(signal, m1_after, max_hold_hours=48):
     else:
         exit_ts, exit_px = m1_after.index[0], float(m1_after.iloc[0]["close"])
     r = (exit_px - entry) / abs(entry - sl) if direction == "LONG" else (entry - exit_px) / abs(entry - sl)
-    return {"outcome": "EXPIRED", "r": round(r, 2), "closed_at": exit_ts.isoformat()}
+    return {"outcome": "EXPIRED", "r": round(r, 2), "closed_at": exit_ts.isoformat(),
+            "peak_r": peak_profit_r(signal, m1_after, exit_ts)}
 
 
 # ----------------------------------------------------------------------------
@@ -1096,7 +1129,13 @@ def liquidity_map(price, pools, n=5):
             "price": z["price"], "touches": z["touches"], "grade": z["grade"],
             "premium": z["premium"], "distance": round(abs(z["price"] - price), 2),
         }
-    return {"above": [row(z) for z in above], "below": [row(z) for z in below]}
+    # Tiny zones ride along separately (Mickey, 20 Oct 2026) — mirrors
+    # docs/engine.js: the chart draws them faintly; above/below unchanged.
+    tiny = [z for z in zones if z["grade"] == "tiny"]
+    tiny_above = sorted([z for z in tiny if z["price"] >= price], key=lambda z: z["price"])[:4]
+    tiny_below = sorted([z for z in tiny if z["price"] < price], key=lambda z: z["price"], reverse=True)[:4]
+    return {"above": [row(z) for z in above], "below": [row(z) for z in below],
+            "tinyAbove": [row(z) for z in tiny_above], "tinyBelow": [row(z) for z in tiny_below]}
 
 
 def build_payload(m1, h1, h4, now=None):
