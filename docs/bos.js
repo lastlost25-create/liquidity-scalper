@@ -278,9 +278,132 @@ function recompute() {
     }
     paperSave();
     render(active, null);
+    drawBosChart(all, closed, active);
   } catch (e) {
     render(null, 'BOS engine error: ' + esc(e && e.message ? e.message : e));
   }
+}
+
+// ---- BOS chart (30 Oct 2026, Mickey's ask: chart same as sniper setup,
+// auto-marked when a setup appears or a signal fires) ----
+// Same candle style as the sniper chart (green #22c55e / red #ef4444,
+// amber #f5a623 for test/pending marks), M15 gold only, last 120 bars.
+// Redraws on every engine recompute (20s while the tab is open), so
+// markers appear on their own — no reload, no tap needed:
+//  * amber dashed line + tag = armed setup (break done, awaiting
+//    pullback touch and/or confirmation close)
+//  * green ▲ / red ▼ arrow = signal entry bar (open trade + recent
+//    resolved trades, when the entry bar is in view)
+//  * dashed lines = open trade entry / SL / TP levels
+// Wrapped in try/catch: a chart failure must never break the engine,
+// the paper tally, or the alerts.
+let bosChartLast = null, bosChartResizeWired = false;
+function drawBosChart(all, closed, active) {
+  try {
+    const cv = $('bosChart');
+    if (!cv) return;
+    bosChartLast = { all, closed, active };
+    if (!bosChartResizeWired) {
+      bosChartResizeWired = true;
+      window.addEventListener('resize', () => {
+        if (bosChartLast) drawBosChart(bosChartLast.all, bosChartLast.closed, bosChartLast.active);
+      });
+    }
+    const W = cv.clientWidth, H = 320;
+    if (!W) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = W * dpr; cv.height = H * dpr;
+    const c = cv.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.fillStyle = '#0e1420'; c.fillRect(0, 0, W, H);
+    const bars = (all || []).slice(-120);
+    c.font = '11px system-ui';
+    if (bars.length < 5) {
+      c.fillStyle = '#9aa3b8'; c.textAlign = 'center';
+      c.fillText('waiting for M15 feed…', W / 2, H / 2);
+      return;
+    }
+    let lo = Infinity, hi = -Infinity;
+    for (const b of bars) { if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h; }
+    const extra = [];
+    if (paper.open) extra.push(paper.open.entry, paper.open.sl, paper.open.tp);
+    if (active) for (const d of [1, -1]) if (active[d]) extra.push(active[d].ref);
+    for (const v of extra) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    const pad = (hi - lo) * 0.03 || 1;
+    lo -= pad; hi += pad;
+    const TOP = 8, BOT = H - 20;
+    const y = v => TOP + (hi - v) / (hi - lo) * (BOT - TOP);
+    const cw = W / bars.length;
+    c.strokeStyle = 'rgba(255,255,255,.07)'; c.lineWidth = 1;
+    for (let g = 0; g <= 4; g++) {
+      const yy = TOP + (BOT - TOP) * g / 4, pv = hi - (hi - lo) * g / 4;
+      c.beginPath(); c.moveTo(0, yy); c.lineTo(W, yy); c.stroke();
+      c.fillStyle = '#9aa3b8'; c.textAlign = 'right';
+      c.fillText(pv.toFixed(1), W - 4, yy - 3);
+    }
+    for (let i = 0; i < bars.length; i++) {
+      const b = bars[i], x = i * cw + cw / 2, bw = Math.max(1, cw * 0.62);
+      const col = b.c >= b.o ? '#22c55e' : '#ef4444';
+      c.strokeStyle = col;
+      c.beginPath(); c.moveTo(x, y(b.h)); c.lineTo(x, y(b.l)); c.stroke();
+      c.fillStyle = col;
+      c.fillRect(x - bw / 2, Math.min(y(b.o), y(b.c)), bw,
+        Math.max(1, Math.abs(y(b.c) - y(b.o))));
+    }
+    c.textAlign = 'left';
+    const labStep = bars.length > 100 ? 20 : 10;
+    c.fillStyle = '#9aa3b8';
+    for (let i = 0; i < bars.length; i += labStep) {
+      const t = new Date(bars[i].t);
+      c.fillText(String(t.getHours()).padStart(2, '0') + ':' +
+        String(t.getMinutes()).padStart(2, '0'), i * cw + 2, H - 6);
+    }
+    const hline = (v, color, label) => {
+      const yy = Math.round(y(v)) + .5;
+      c.strokeStyle = color; c.setLineDash([6, 4]); c.lineWidth = 1.2;
+      c.beginPath(); c.moveTo(0, yy); c.lineTo(W, yy); c.stroke();
+      c.setLineDash([]);
+      c.fillStyle = color; c.textAlign = 'left';
+      c.fillText(label, 6, yy - 4);
+    };
+    const arrowAt = (barTime, dir, color, big) => {
+      for (let i = 0; i < bars.length; i++) {
+        if (bars[i].t > barTime) {
+          const b = bars[i], x = i * cw + cw / 2;
+          c.fillStyle = color; c.textAlign = 'center';
+          c.font = (big ? '15px' : '12px') + ' system-ui';
+          if (dir === 1) c.fillText('▲', x, y(b.l) + 14);
+          else c.fillText('▼', x, y(b.h) - 6);
+          c.font = '11px system-ui';
+          return true;
+        }
+      }
+      return false;
+    };
+    if (active) {
+      for (const d of [1, -1]) {
+        const st = active[d];
+        if (!st) continue;
+        hline(st.ref, '#f5a623', (d === 1 ? 'LONG SETUP' : 'SHORT SETUP') +
+          ' ref ' + fmt(st.ref) + (st.touched ? ' · pullback valid' : ''));
+      }
+    }
+    if (paper.open) {
+      const o = paper.open, col = o.dir === 1 ? '#22c55e' : '#ef4444';
+      hline(o.entry, col, 'ENTRY ' + fmt(o.entry));
+      hline(o.sl, '#ef4444', 'SL ' + fmt(o.sl));
+      hline(o.tp, '#22c55e', 'TP ' + fmt(o.tp));
+      arrowAt(o.at, o.dir, col, true);
+    }
+    for (const t of (paper.trades || []).slice(0, 10)) {
+      const col = t.dir === 1 ? '#22c55e' : '#ef4444';
+      c.globalAlpha = 0.6;
+      arrowAt(t.at, t.dir, col, false);
+      c.globalAlpha = 1;
+    }
+    c.fillStyle = '#9aa3b8'; c.textAlign = 'left';
+    c.fillText('BOS · M15 GOLD', 6, 14);
+  } catch (e) { /* chart must never break engine/tally/alerts */ }
 }
 
 function render(active, err) {
