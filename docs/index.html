@@ -278,11 +278,7 @@
   <button class="sym" id="replayBtn" title="bar replay — step through history and watch signals print on time">⏪</button>
   <span class="viewtabs" title="chart setups — SNIPER is the live signal setup">
     <button class="sym viewtab active" data-view="sniper" title="current sniper setup — live signals">SNIPER</button>
-    <button class="sym viewtab" data-view="adv" title="major 4H + Daily reversal levels in advance">ADV REV</button>
     <button class="sym viewtab" data-view="dqrs" title="daily reversal levels in advance (D1 + daily open + PDH/PDL)">DQRS</button>
-    <button class="sym viewtab wicktab" data-view="wick03" title="TEST ONLY — experimental wick-rejection paper strategy (backtest negative), observe only">WICK 0.3<span class="testbadge">TEST</span></button>
-    <button class="sym viewtab wicktab" data-view="wick04" title="TEST ONLY — experimental wick-rejection paper strategy (backtest negative), observe only">WICK 0.4<span class="testbadge">TEST</span></button>
-    <button class="sym viewtab wicktab" data-view="btc" title="TEST ONLY — BTCUSD paper observation (backtests negative), observe only">BTCUSD<span class="testbadge">TEST</span></button>
     <button class="sym viewtab wicktab" data-view="flow" title="TEST ONLY — Mickey's DOMFlow order-flow read (Bitget XAUUSDT perp, NOT spot, unproven), observe only">FLOW<span class="testbadge">TEST</span></button>
     <button class="sym viewtab wicktab" data-view="bos" title="TEST ONLY — Valid BOS Pullback paper observation (backtest passed Jan-Oct 2026: 131 trades, 52.7% WR, +0.379R/trade net), observe only">BOS<span class="testbadge">TEST</span></button>
   </span>
@@ -711,7 +707,7 @@ function setTF(tf){
    The footer shows the running build; 3s after load the page fetches its own
    URL bypassing cache and, if the served build differs, offers a one-tap
    update that reloads cache-busted. Bump BUILD on every deploy. */
-const BUILD = '30Oct-2';
+const BUILD = '30Oct-3';
 const $ = id => document.getElementById(id);
 (function buildGuard(){
   const stamp = $('buildStamp'); if(stamp) stamp.textContent = BUILD;
