@@ -373,7 +373,7 @@
     <div id="bosTradesWrap">
       <div class="flabel">RECENT PAPER TRADES</div>
       <div id="bosSignals"></div>
-      <div style="font-size:10.5px;color:var(--dim);margin-top:4px">scroll to zoom · amber dashed = armed setup · ▲▼ = signal entry · dashed lines = entry / SL / TP</div>
+      <div style="font-size:10.5px;color:var(--dim);margin-top:4px">drag to pan · scroll to zoom · double-click resets · amber dashed = armed setup · ▲▼ = signal entry · dashed lines = entry / SL / TP</div>
     </div>
     <div id="bosBacktest">🧪 BACKTEST PASSED — M15 · 131 trades · +0.379R/trade net · PF 1.65 · maxDD 10.5R</div>
   </div>
@@ -444,7 +444,7 @@
 <div id="updBar" style="display:none">🔄 A newer version of this page is ready <button id="updBtn" type="button">UPDATE NOW</button></div>
 <script src="engine.js?v=18"></script>
 <script src="flow.js?v=5"></script>
-<script src="bos.js?v=5"></script>
+<script src="bos.js?v=6"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -732,7 +732,7 @@ function setTF(tf){
    The footer shows the running build; 3s after load the page fetches its own
    URL bypassing cache and, if the served build differs, offers a one-tap
    update that reloads cache-busted. Bump BUILD on every deploy. */
-const BUILD = '30Oct-6';
+const BUILD = '30Oct-7';
 const $ = id => document.getElementById(id);
 (function buildGuard(){
   const stamp = $('buildStamp'); if(stamp) stamp.textContent = BUILD;
