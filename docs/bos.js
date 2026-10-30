@@ -37,51 +37,71 @@ let paper = (() => {
 function paperSave() { try { localStorage.setItem(PAPER_KEY, JSON.stringify(paper)); } catch (e) {} }
 
 // ---- signal alerts (30 Oct 2026, Mickey's ask: no long chart-watching) ----
-// Two free channels, both optional, both configured in the tab itself:
+// Three free channels, all optional, all configured in the tab itself:
 //  * browser notification (works while this page is open; needs Allow)
-//  * webhook POST (ntfy.sh topic = instant phone push via the free ntfy
-//    app, no account; or an IFTTT webhook = email). One URL field covers
-//    both: ntfy URLs get a plain-text message, anything else gets
-//    form-encoded value1/2/3 (IFTTT format). Fire-and-forget via no-cors
-//    so IFTTT's missing CORS headers can't block the trigger.
-//  Nothing is sent except the signal itself. Fires ONLY when a new paper
-//  trade opens — never on re-renders, never for armed setups.
+//  * ntfy.sh topic = instant phone push via the free ntfy app, no account
+//  * IFTTT webhook = email (address lives in HIS IFTTT account, never here)
+//  * WhatsApp via CallMeBot (free, unofficial — can stop working anytime)
+// Numbers, keys and URLs live in this device's localStorage ONLY — they
+// are never sent to the assistant or anyone else. Alerts fire ONLY when
+// a new paper trade opens (or on the TEST button) — never on re-renders,
+// never for armed setups. Webhook POSTs use no-cors fire-and-forget so
+// IFTTT's missing CORS headers can't block the trigger.
 const ALERT_KEY = 'liqscalp_bos_alerts_v1';
 let alerts = (() => {
   try {
-    return JSON.parse(localStorage.getItem(ALERT_KEY) || 'null') ||
-      { browser: false, webhook: '' };
-  } catch (e) { return { browser: false, webhook: '' }; }
+    const a = JSON.parse(localStorage.getItem(ALERT_KEY) || 'null') || {};
+    if (a.webhook && !a.ntfy) a.ntfy = a.webhook; // migrate single-field setups
+    return { browser: !!a.browser, ntfy: a.ntfy || '', ifttt: a.ifttt || '',
+             waPhone: a.waPhone || '', waKey: a.waKey || '' };
+  } catch (e) { return { browser: false, ntfy: '', ifttt: '', waPhone: '', waKey: '' }; }
 })();
 let alertsWired = false;
 function alertsSave() { try { localStorage.setItem(ALERT_KEY, JSON.stringify(alerts)); } catch (e) {} }
-function notifySignal(o) {
-  const title = 'BOS ' + (o.dir === 1 ? 'LONG' : 'SHORT') + ' @ ' + fmt(o.entry);
+function notifySignal(o, isTest) {
+  const title = (isTest ? 'TEST · ' : '') + 'BOS ' + (o.dir === 1 ? 'LONG' : 'SHORT') + ' @ ' + fmt(o.entry);
   const body = 'SL ' + fmt(o.sl) + ' · TP ' + fmt(o.tp) + ' · M15 gold (paper)';
   if (alerts.browser && 'Notification' in window && Notification.permission === 'granted') {
     try { new Notification(title, { body }); } catch (e) {}
   }
-  if (alerts.webhook) {
+  if (alerts.ntfy) {
     try {
-      const isNtfy = alerts.webhook.indexOf('ntfy.sh') !== -1;
-      const payload = isNtfy ? (title + ' — ' + body)
-        : 'value1=' + encodeURIComponent(title) +
+      fetch(alerts.ntfy, { method: 'POST', mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
+        body: title + ' — ' + body }).catch(() => {});
+    } catch (e) {}
+  }
+  if (alerts.ifttt) {
+    try {
+      fetch(alerts.ifttt, { method: 'POST', mode: 'no-cors',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'value1=' + encodeURIComponent(title) +
           '&value2=' + encodeURIComponent(body) +
-          '&value3=' + encodeURIComponent('BOS paper signal');
-      fetch(alerts.webhook, { method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': isNtfy ? 'text/plain' : 'application/x-www-form-urlencoded' },
-        body: payload }).catch(() => {});
+          '&value3=' + encodeURIComponent('BOS paper signal') }).catch(() => {});
+    } catch (e) {}
+  }
+  if (alerts.waPhone && alerts.waKey) {
+    try {
+      const phone = alerts.waPhone.replace(/\D/g, '');
+      const url = 'https://api.callmebot.com/whatsapp.php?phone=' + phone +
+        '&text=' + encodeURIComponent(title + ' — ' + body) +
+        '&apikey=' + encodeURIComponent(alerts.waKey);
+      fetch(url, { method: 'GET', mode: 'no-cors' }).catch(() => {});
     } catch (e) {}
   }
 }
 function wireAlerts() {
   if (alertsWired) return;
   alertsWired = true;
-  const cb = $('bosNotifyBrowser'), inp = $('bosWebhook'),
-    btn = $('bosAlertSave'), st = $('bosAlertState');
-  if (!cb || !inp || !btn) return;
+  const cb = $('bosNotifyBrowser'), ntfy = $('bosNtfy'), ift = $('bosIfttt'),
+    wap = $('bosWaPhone'), wak = $('bosWaKey'),
+    btn = $('bosAlertSave'), tst = $('bosAlertTest'), st = $('bosAlertState');
+  if (!cb || !ntfy || !btn) return;
   cb.checked = !!alerts.browser;
-  inp.value = alerts.webhook || '';
+  ntfy.value = alerts.ntfy || '';
+  if (ift) ift.value = alerts.ifttt || '';
+  if (wap) wap.value = alerts.waPhone || '';
+  if (wak) wak.value = alerts.waKey || '';
   if (!('Notification' in window)) { cb.disabled = true; }
   cb.addEventListener('change', () => {
     if (!cb.checked) { alerts.browser = false; alertsSave(); return; }
@@ -99,11 +119,19 @@ function wireAlerts() {
     }
   });
   btn.addEventListener('click', () => {
-    alerts.webhook = inp.value.trim();
+    alerts.ntfy = ntfy.value.trim();
+    if (ift) alerts.ifttt = ift.value.trim();
+    if (wap) alerts.waPhone = wap.value.trim();
+    if (wak) alerts.waKey = wak.value.trim();
     alertsSave();
-    if (st) st.textContent = alerts.webhook
-      ? 'Saved ✓ — the next BOS signal will POST to your webhook.'
-      : 'Saved — webhook cleared; only browser alerts (if ticked) apply.';
+    if (st) st.textContent = 'Saved ✓ — the next BOS signal will fire every channel you filled in.';
+  });
+  if (tst) tst.addEventListener('click', () => {
+    const all = (typeof M15 !== 'undefined' ? M15 : []) || [];
+    const last = all.length ? all[all.length - 1].c : null;
+    notifySignal({ dir: 1, entry: last, sl: last != null ? last - 5 : null,
+      tp: last != null ? last + 10 : null }, true);
+    if (st) st.textContent = 'Test alert sent — check your phone / email / WhatsApp now. (Browser test needs the box ticked + permission allowed.)';
   });
 }
 
