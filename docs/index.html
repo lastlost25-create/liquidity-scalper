@@ -342,12 +342,17 @@
     <div class="flabel">RECENT PAPER TRADES</div>
     <div id="bosSignals"></div>
     <div id="bosAlerts">
-      <div class="flabel">🔔 SIGNAL ALERTS (optional — nothing leaves this device except the alert itself)</div>
-      <div style="font-size:11px;color:var(--dim)">When a BOS signal fires, the page can notify you. Pick one — setup takes a minute on your phone:</div>
+      <div class="flabel">🔔 SIGNAL ALERTS (optional — your number, keys and URLs stay on this device only, never sent to anyone)</div>
+      <div style="font-size:11px;color:var(--dim)">When a BOS signal fires, the page can notify you on all three at once. Fill in the ones you want, tap SAVE, then SEND TEST ALERT to verify them right now:</div>
       <label style="display:block;margin:6px 0;font-size:12px"><input type="checkbox" id="bosNotifyBrowser"> Browser notification (works while this page is open)</label>
-      <label style="display:block;margin:6px 0;font-size:12px">Alert webhook URL (ntfy.sh topic or IFTTT webhook — free push to your phone / email):</label>
-      <input type="text" id="bosWebhook" placeholder="e.g. https://ntfy.sh/mickey-bos-alerts">
-      <div><button id="bosAlertSave" type="button">SAVE ALERTS</button><span id="bosAlertState" style="font-size:11px;color:var(--dim);margin-left:6px"></span></div>
+      <label style="display:block;margin:6px 0;font-size:12px">📱 ntfy phone push (free app, no account):</label>
+      <input type="text" id="bosNtfy" placeholder="e.g. https://ntfy.sh/mickey-bos-alerts">
+      <label style="display:block;margin:6px 0;font-size:12px">✉️ IFTTT email webhook (free IFTTT account):</label>
+      <input type="text" id="bosIfttt" placeholder="e.g. https://maker.ifttt.com/trigger/bos_signal/with/key/XXXX">
+      <label style="display:block;margin:6px 0;font-size:12px">💬 WhatsApp via CallMeBot (free, unofficial):</label>
+      <input type="text" id="bosWaPhone" placeholder="Your number with country code, e.g. 923001234567">
+      <input type="text" id="bosWaKey" placeholder="CallMeBot apikey">
+      <div><button id="bosAlertSave" type="button">SAVE ALERTS</button><button id="bosAlertTest" type="button" style="background:#f5a623">SEND TEST ALERT</button><span id="bosAlertState" style="font-size:11px;color:var(--dim);margin-left:6px"></span></div>
     </div>
     <div style="font-size:11px;color:var(--dim);margin-top:8px">Rules: break a confirmed swing by ≥0.1×ATR → ≥3 bars without a retest → touch the reference level → close beyond the new extreme confirms. Entry next bar open · SL reference ∓0.1×ATR · TP ±2×ATR · M15 gold only · one open paper trade at a time.</div>
   </div>
@@ -418,7 +423,7 @@
 <div id="updBar" style="display:none">🔄 A newer version of this page is ready <button id="updBtn" type="button">UPDATE NOW</button></div>
 <script src="engine.js?v=18"></script>
 <script src="flow.js?v=5"></script>
-<script src="bos.js?v=1"></script>
+<script src="bos.js?v=2"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -706,7 +711,7 @@ function setTF(tf){
    The footer shows the running build; 3s after load the page fetches its own
    URL bypassing cache and, if the served build differs, offers a one-tap
    update that reloads cache-busted. Bump BUILD on every deploy. */
-const BUILD = '30Oct-1';
+const BUILD = '30Oct-2';
 const $ = id => document.getElementById(id);
 (function buildGuard(){
   const stamp = $('buildStamp'); if(stamp) stamp.textContent = BUILD;
