@@ -93,6 +93,21 @@ function notifySignal(o, isTest) {
 function wireAlerts() {
   if (alertsWired) return;
   alertsWired = true;
+  // one-screen layout: alerts live behind a single top-right button;
+  // the button shows ON when any channel is configured.
+  const tg = $('bosAlertToggle'), ap = $('bosAlerts');
+  const refreshToggle = () => {
+    if (tg) tg.textContent = '🔔 Alerts' +
+      ((alerts.browser || alerts.ntfy || alerts.ifttt ||
+        (alerts.waPhone && alerts.waKey)) ? ' · ON' : '');
+  };
+  if (tg && ap && !tg.dataset.wired) {
+    tg.dataset.wired = '1';
+    tg.addEventListener('click', () => {
+      ap.style.display = ap.style.display === 'block' ? 'none' : 'block';
+    });
+  }
+  refreshToggle();
   const cb = $('bosNotifyBrowser'), ntfy = $('bosNtfy'), ift = $('bosIfttt'),
     wap = $('bosWaPhone'), wak = $('bosWaKey'),
     btn = $('bosAlertSave'), tst = $('bosAlertTest'), st = $('bosAlertState');
@@ -104,7 +119,7 @@ function wireAlerts() {
   if (wak) wak.value = alerts.waKey || '';
   if (!('Notification' in window)) { cb.disabled = true; }
   cb.addEventListener('change', () => {
-    if (!cb.checked) { alerts.browser = false; alertsSave(); return; }
+    if (!cb.checked) { alerts.browser = false; alertsSave(); refreshToggle(); return; }
     if (Notification.permission === 'granted') { alerts.browser = true; alertsSave(); }
     else if (Notification.permission === 'denied') {
       cb.checked = false;
@@ -114,6 +129,7 @@ function wireAlerts() {
         alerts.browser = (p === 'granted');
         cb.checked = alerts.browser;
         alertsSave();
+        refreshToggle();
         if (st) st.textContent = alerts.browser ? 'Browser alerts ON.' : 'Permission not granted — browser alerts stay off.';
       });
     }
@@ -124,6 +140,7 @@ function wireAlerts() {
     if (wap) alerts.waPhone = wap.value.trim();
     if (wak) alerts.waKey = wak.value.trim();
     alertsSave();
+    refreshToggle();
     if (st) st.textContent = 'Saved ✓ — the next BOS signal will fire every channel you filled in.';
   });
   if (tst) tst.addEventListener('click', () => {
@@ -309,7 +326,7 @@ function drawBosChart(all, closed, active) {
         if (bosChartLast) drawBosChart(bosChartLast.all, bosChartLast.closed, bosChartLast.active);
       });
     }
-    const W = cv.clientWidth, H = 320;
+    const W = cv.clientWidth, H = cv.clientHeight || 320;
     if (!W) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     cv.width = W * dpr; cv.height = H * dpr;
@@ -401,8 +418,6 @@ function drawBosChart(all, closed, active) {
       arrowAt(t.at, t.dir, col, false);
       c.globalAlpha = 1;
     }
-    c.fillStyle = '#9aa3b8'; c.textAlign = 'left';
-    c.fillText('BOS · M15 GOLD', 6, 14);
   } catch (e) { /* chart must never break engine/tally/alerts */ }
 }
 
@@ -433,7 +448,7 @@ function render(active, err) {
     (paper.open ? ' · trade open' : '') +
     ' — judge at 100+ resolved, net positive, per the standing process.';
   s.innerHTML = paper.trades.length
-    ? paper.trades.slice(0, 10).map(t =>
+    ? paper.trades.slice(0, 5).map(t =>
         '<div>' + new Date(t.at).toLocaleString() + ' · ' +
         (t.dir === 1 ? 'LONG' : 'SHORT') + ' @ ' + fmt(t.entry) +
         ' → ' + t.exit + ' ' + (t.r > 0 ? '+' : '') + t.r.toFixed(2) +
