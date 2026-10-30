@@ -314,7 +314,7 @@ function recompute() {
 //  * dashed lines = open trade entry / SL / TP levels
 // Wrapped in try/catch: a chart failure must never break the engine,
 // the paper tally, or the alerts.
-let bosChartLast = null, bosChartResizeWired = false;
+let bosChartLast = null, bosChartResizeWired = false, bosView = 120;
 function drawBosChart(all, closed, active) {
   try {
     const cv = $('bosChart');
@@ -325,6 +325,14 @@ function drawBosChart(all, closed, active) {
       window.addEventListener('resize', () => {
         if (bosChartLast) drawBosChart(bosChartLast.all, bosChartLast.closed, bosChartLast.active);
       });
+      // mouse-wheel zoom, same as the sniper chart (wheel up = zoom in,
+      // wheel down = zoom out, 40..600 bars, anchored to the live edge).
+      cv.addEventListener('wheel', e => {
+        e.preventDefault();
+        const f = e.deltaY < 0 ? 1.18 : 1 / 1.18;
+        bosView = Math.min(600, Math.max(40, Math.round(bosView / f)));
+        if (bosChartLast) drawBosChart(bosChartLast.all, bosChartLast.closed, bosChartLast.active);
+      }, { passive: false });
     }
     const W = cv.clientWidth, H = cv.clientHeight || 320;
     if (!W) return;
@@ -333,7 +341,7 @@ function drawBosChart(all, closed, active) {
     const c = cv.getContext('2d');
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.fillStyle = '#0e1420'; c.fillRect(0, 0, W, H);
-    const bars = (all || []).slice(-120);
+    const bars = (all || []).slice(-bosView);
     c.font = '11px system-ui';
     if (bars.length < 5) {
       c.fillStyle = '#9aa3b8'; c.textAlign = 'center';
