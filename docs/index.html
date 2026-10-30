@@ -172,21 +172,36 @@
   #flowSignal .fv{border:none;padding:0;margin:0;background:none}
   /* BOS tab (Valid BOS Pullback paper tab, 30 Oct 2026): same TEST identity
      as FLOW, own panel, never mistakable for sniper. */
-  #bosWrap{padding:10px 12px;max-width:720px;margin:0 auto;font-size:13px;line-height:1.5;
-    max-height:calc(100vh - 170px);overflow-y:auto}
-  #bosWarn{background:rgba(60,38,4,.97);border:1px solid #f5a623;color:#ffd97a;
-    font-size:11px;padding:7px 10px;border-radius:6px;margin-bottom:10px;text-align:center}
-  #bosVerdict{background:rgba(13,18,27,.92);border:1px solid var(--line);border-radius:10px;
-    padding:9px 11px;margin-bottom:10px}
+  /* BOS tab, one-screen sniper-style layout (30 Oct 2026, Mickey's ask):
+     full-stage chart like the sniper, verdict/tally/trades as floating
+     panels over it, alerts behind one button — everything visible,
+     no scrolling. */
+  #bosWrap{position:absolute;inset:0;font-size:13px;line-height:1.5;z-index:1}
+  #bosChart{position:absolute;inset:0;width:100%;height:100%;display:block;background:#0e1420}
+  #bosTop{position:absolute;top:10px;left:10px;max-width:305px;z-index:5;
+    background:rgba(13,18,27,.92);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+  #bosTop #bosWarn{background:none;border:none;padding:0;margin:0 0 6px;text-align:left;
+    font-size:11px;color:#ffd97a}
+  #bosTop #bosVerdict{background:none;border:none;padding:0;margin:0}
   #bosVerdict .bs-tag{font-size:9px;letter-spacing:.09em;color:#4ade80;font-weight:700;margin-bottom:3px}
-  #bosPaper{font-size:11px;color:var(--dim);padding:2px 0;margin-bottom:8px}
-  #bosSignals{font-size:12px;line-height:1.6}
+  #bosTop #bosPaper{font-size:11px;color:var(--dim);margin-top:6px}
+  #bosTradesWrap{position:absolute;left:10px;bottom:10px;max-width:305px;z-index:5;
+    background:rgba(13,18,27,.85);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+  #bosSignals{font-size:11.5px;line-height:1.55}
   #bosSignals .dim{color:var(--dim)}
-  #bosAlerts{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:10px}
+  #bosBacktest{position:absolute;right:10px;bottom:10px;max-width:300px;z-index:5;
+    font-size:10.5px;line-height:1.4;color:#ffd9a0;background:rgba(13,18,27,.85);
+    border:1px solid #8a6414;border-radius:8px;padding:6px 8px}
+  #bosAlertsWrap{position:absolute;top:10px;right:10px;z-index:6;text-align:right}
+  #bosAlertToggle{background:rgba(13,18,27,.92);color:#e8ecf1;border:1px solid var(--line);
+    border-radius:8px;padding:7px 11px;font-weight:700;cursor:pointer;font-size:12px}
+  #bosAlerts{display:none;margin-top:8px;text-align:left;background:rgba(13,18,27,.95);
+    border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:280px;max-width:78vw}
   #bosAlerts input[type=text]{width:100%;background:#0d1219;color:#e8ecf1;border:1px solid #333;
     border-radius:6px;padding:6px 8px;margin:4px 0;font-size:12px}
   #bosAlerts button{background:#22c55e;color:#04150a;border:none;border-radius:6px;
     padding:6px 12px;font-weight:800;cursor:pointer;margin-right:6px}
+  @media (max-width:700px){ #bosTop{max-width:78vw} #bosTradesWrap{max-width:78vw} #bosBacktest{display:none} }
   #flowSignal .fp{margin-top:7px}
   @media (max-width:700px){ #flowSignal{max-width:78vw} }
   #flowPrice{font-weight:800;font-size:20px}
@@ -331,16 +346,15 @@
   <!-- BOS tab panel (Valid BOS Pullback, 30 Oct 2026):
        TEST ONLY — observe-only paper tally, never trade it live -->
   <div id="bosWrap" style="display:none">
-    <div id="bosWarn">⚠ TEST — Valid BOS Pullback paper observation · observe only, never trade it live on the backtest alone</div>
-    <div id="bosBacktest" style="background:rgba(60,38,4,.97);color:#ffd9a0;border:1px solid #8a6414;border-radius:6px;padding:6px 8px;margin:6px 0;font-size:11px;line-height:1.45">🧪 <b>BACKTEST — PASSED</b> (XAUUSD M15, Jan–Oct 2026, 131 trades): win rate <b>52.7%</b> · <b>+0.379R/trade</b> net of costs · profit factor 1.65 · max drawdown 10.5R. The <b>live paper tally</b> below is the forward test. Judge at 100+ resolved, net positive, per the standing process.</div>
-    <div id="bosVerdict"></div>
-    <div id="bosPaper"></div>
-    <div class="flabel">M15 CHART — AUTO-MARKED SETUPS &amp; SIGNALS</div>
-    <canvas id="bosChart" style="width:100%;height:320px;display:block;background:#0e1420;border:1px solid #1c2434;border-radius:6px"></canvas>
-    <div style="font-size:11px;color:var(--dim)">Same candles as the sniper chart, M15 gold only. Refreshes every 20s with the BOS engine — no reload needed: amber dashed line = armed setup (awaiting pullback/confirmation), green/red arrow = signal entry, dashed lines = entry / SL / TP of the open paper trade.</div>
-    <div class="flabel">RECENT PAPER TRADES</div>
-    <div id="bosSignals"></div>
-    <div id="bosAlerts">
+    <canvas id="bosChart"></canvas>
+    <div id="bosTop">
+      <div id="bosWarn">⚠ TEST — paper observation only, never trade it live on the backtest alone</div>
+      <div id="bosVerdict"></div>
+      <div id="bosPaper"></div>
+    </div>
+    <div id="bosAlertsWrap">
+      <button id="bosAlertToggle" type="button">🔔 Alerts</button>
+      <div id="bosAlerts">
       <div class="flabel">🔔 SIGNAL ALERTS (optional — your number, keys and URLs stay on this device only, never sent to anyone)</div>
       <div style="font-size:11px;color:var(--dim)">When a BOS signal fires, the page can notify you on all three at once. Fill in the ones you want, tap SAVE, then SEND TEST ALERT to verify them right now:</div>
       <label style="display:block;margin:6px 0;font-size:12px"><input type="checkbox" id="bosNotifyBrowser"> Browser notification (works while this page is open)</label>
@@ -352,8 +366,16 @@
       <input type="text" id="bosWaPhone" placeholder="Your number with country code, e.g. 923001234567">
       <input type="text" id="bosWaKey" placeholder="CallMeBot apikey">
       <div><button id="bosAlertSave" type="button">SAVE ALERTS</button><button id="bosAlertTest" type="button" style="background:#f5a623">SEND TEST ALERT</button><span id="bosAlertState" style="font-size:11px;color:var(--dim);margin-left:6px"></span></div>
+      <div style="font-size:11px;color:var(--dim);margin-top:8px">Rules: break a confirmed swing by ≥0.1×ATR → ≥3 bars without a retest → touch the reference level → close beyond the new extreme confirms. Entry next bar open · SL reference ∓0.1×ATR · TP ±2×ATR · M15 gold only · one open paper trade at a time.</div>
+      <div style="font-size:10.5px;color:#ffd9a0;margin-top:6px">🧪 BACKTEST PASSED — M15 · 131 trades · +0.379R/trade net · PF 1.65 · maxDD 10.5R. Judge the live tally at 100+ resolved, net positive.</div>
+      </div>
     </div>
-    <div style="font-size:11px;color:var(--dim);margin-top:8px">Rules: break a confirmed swing by ≥0.1×ATR → ≥3 bars without a retest → touch the reference level → close beyond the new extreme confirms. Entry next bar open · SL reference ∓0.1×ATR · TP ±2×ATR · M15 gold only · one open paper trade at a time.</div>
+    <div id="bosTradesWrap">
+      <div class="flabel">RECENT PAPER TRADES</div>
+      <div id="bosSignals"></div>
+      <div style="font-size:10.5px;color:var(--dim);margin-top:4px">amber dashed = armed setup · ▲▼ = signal entry · dashed lines = entry / SL / TP</div>
+    </div>
+    <div id="bosBacktest">🧪 BACKTEST PASSED — M15 · 131 trades · +0.379R/trade net · PF 1.65 · maxDD 10.5R</div>
   </div>
   <div id="err"></div>
   <!-- bar replay controls (Mickey, 7 Oct 2026): step through history candle by
@@ -422,7 +444,7 @@
 <div id="updBar" style="display:none">🔄 A newer version of this page is ready <button id="updBtn" type="button">UPDATE NOW</button></div>
 <script src="engine.js?v=18"></script>
 <script src="flow.js?v=5"></script>
-<script src="bos.js?v=3"></script>
+<script src="bos.js?v=4"></script>
 <!-- CACHE RULE: bump ?v= on engine.js every time engine.js changes, or users
      with a cached copy get a version mismatch (e.g. black chart on new tabs) -->
 <script>
@@ -710,7 +732,7 @@ function setTF(tf){
    The footer shows the running build; 3s after load the page fetches its own
    URL bypassing cache and, if the served build differs, offers a one-tap
    update that reloads cache-busted. Bump BUILD on every deploy. */
-const BUILD = '30Oct-4';
+const BUILD = '30Oct-5';
 const $ = id => document.getElementById(id);
 (function buildGuard(){
   const stamp = $('buildStamp'); if(stamp) stamp.textContent = BUILD;
