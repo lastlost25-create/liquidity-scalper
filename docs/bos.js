@@ -315,6 +315,7 @@ function recompute() {
 // Wrapped in try/catch: a chart failure must never break the engine,
 // the paper tally, or the alerts.
 let bosChartLast = null, bosChartResizeWired = false, bosView = 120;
+let bosOff = 0, bosHover = null, bosCtx = null, bosDown = null;
 function drawBosChart(all, closed, active) {
   try {
     const cv = $('bosChart');
@@ -333,6 +334,50 @@ function drawBosChart(all, closed, active) {
         bosView = Math.min(600, Math.max(40, Math.round(bosView / f)));
         if (bosChartLast) drawBosChart(bosChartLast.all, bosChartLast.closed, bosChartLast.active);
       }, { passive: false });
+      // drag to pan + hover/tap crosshair, same as the sniper chart:
+      // drag right = back through history, drag left past the live edge =
+      // chart-shift (blank space opens on the right), double-click resets.
+      cv.style.cursor = 'grab';
+      cv.addEventListener('pointerdown', e => {
+        bosDown = { x: e.clientX, y: e.clientY, off: bosOff };
+        bosHover = null;
+        try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+        cv.style.cursor = 'grabbing';
+      });
+      cv.addEventListener('pointermove', e => {
+        if (bosDown) {
+          const candleW = Math.max(2, cv.clientWidth / bosView);
+          bosOff = bosDown.off + Math.round((e.clientX - bosDown.x) / candleW);
+          if (bosChartLast) drawBosChart(bosChartLast.all, bosChartLast.closed, bosChartLast.active);
+        } else if (bosCtx) {
+          const r = cv.getBoundingClientRect();
+          bosHover = { x: e.clientX - r.left, y: e.clientY - r.top };
+          if (bosChartLast) drawBosChart(bosChartLast.all, bosChartLast.closed, bosChartLast.active);
+        }
+      });
+      const bosEnd = e => {
+        // a tap (no drag) plants the crosshair on that candle, like the
+        // sniper's tap inspector; a real drag just pans.
+        if (bosDown && bosCtx &&
+            Math.hypot(e.clientX - bosDown.x, e.clientY - bosDown.y) < 6) {
+          const r = cv.getBoundingClientRect();
+          bosHover = { x: e.clientX - r.left, y: e.clientY - r.top };
+          if (bosChartLast) drawBosChart(bosChartLast.all, bosChartLast.closed, bosChartLast.active);
+        }
+        bosDown = null; cv.style.cursor = 'grab';
+      };
+      cv.addEventListener('pointerup', bosEnd);
+      cv.addEventListener('pointercancel', () => { bosDown = null; cv.style.cursor = 'grab'; });
+      cv.addEventListener('pointerleave', () => {
+        if (!bosDown) {
+          bosHover = null;
+          if (bosChartLast) drawBosChart(bosChartLast.all, bosChartLast.closed, bosChartLast.active);
+        }
+      });
+      cv.addEventListener('dblclick', () => {
+        bosOff = 0; bosView = 120; bosHover = null;
+        if (bosChartLast) drawBosChart(bosChartLast.all, bosChartLast.closed, bosChartLast.active);
+      });
     }
     const W = cv.clientWidth, H = cv.clientHeight || 320;
     if (!W) return;
@@ -341,9 +386,17 @@ function drawBosChart(all, closed, active) {
     const c = cv.getContext('2d');
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.fillStyle = '#0e1420'; c.fillRect(0, 0, W, H);
-    const bars = (all || []).slice(-bosView);
+    // pan window, same as the sniper chart: offset > 0 = older bars,
+    // offset < 0 = chart-shift (fewer bars, blank space on the right).
+    const full = all || [];
+    const maxOff = Math.max(0, full.length - bosView);
+    const minOff = -Math.max(10, Math.min(240, Math.floor(bosView / 3)));
+    bosOff = Math.min(maxOff, Math.max(minOff, bosOff));
+    const bars = bosOff > 0 ? full.slice(-(bosView + bosOff), -bosOff)
+      : bosOff < 0 ? full.slice(-(bosView + bosOff)) : full.slice(-bosView);
     c.font = '11px system-ui';
     if (bars.length < 5) {
+      bosCtx = null;
       c.fillStyle = '#9aa3b8'; c.textAlign = 'center';
       c.fillText('waiting for M15 feed…', W / 2, H / 2);
       return;
@@ -358,7 +411,9 @@ function drawBosChart(all, closed, active) {
     lo -= pad; hi += pad;
     const TOP = 8, BOT = H - 20;
     const y = v => TOP + (hi - v) / (hi - lo) * (BOT - TOP);
-    const cw = W / bars.length;
+    const cw = W / bosView; // anchored to the zoom level, not the drawn
+    // count, so chart-shifted bars keep their width (sniper rule).
+    bosCtx = { bars, lo, hi, TOP, BOT, cw, W, H };
     c.strokeStyle = 'rgba(255,255,255,.07)'; c.lineWidth = 1;
     for (let g = 0; g <= 4; g++) {
       const yy = TOP + (BOT - TOP) * g / 4, pv = hi - (hi - lo) * g / 4;
@@ -425,6 +480,69 @@ function drawBosChart(all, closed, active) {
       c.globalAlpha = 0.6;
       arrowAt(t.at, t.dir, col, false);
       c.globalAlpha = 1;
+    }
+    // crosshair + OHLC inspector (hover/tap), same as the sniper chart.
+    if (bosHover && bars.length) {
+      const mxi = Math.max(0, Math.min(bars.length - 1,
+        Math.floor(Math.max(0, bosHover.x) / cw)));
+      const k = bars[mxi], xc = mxi * cw + cw / 2;
+      const cy = Math.max(TOP, Math.min(BOT, bosHover.y));
+      const up = k.c >= k.o, kcol = up ? '#22c55e' : '#ef4444';
+      c.save();
+      c.strokeStyle = 'rgba(190,200,220,.55)'; c.lineWidth = 1;
+      c.setLineDash([5, 4]);
+      c.beginPath(); c.moveTo(Math.round(xc) + .5, TOP);
+      c.lineTo(Math.round(xc) + .5, BOT); c.stroke();
+      c.beginPath(); c.moveTo(0, Math.round(cy) + .5);
+      c.lineTo(W, Math.round(cy) + .5); c.stroke();
+      c.setLineDash([]);
+      const pv = hi - (cy - TOP) / (BOT - TOP) * (hi - lo), ptxt = pv.toFixed(2);
+      c.font = '700 12px system-ui';
+      const ptw = c.measureText(ptxt).width;
+      c.fillStyle = '#8fa0bf'; c.fillRect(W - ptw - 12, cy - 10, ptw + 12, 20);
+      c.fillStyle = '#0a0e14'; c.textAlign = 'center';
+      c.fillText(ptxt, W - (ptw + 12) / 2, cy + 4);
+      const dt = new Date(k.t), mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][dt.getMonth()];
+      const ttxt = dt.getDate() + ' ' + mon + ' ' +
+        String(dt.getHours()).padStart(2, '0') + ':' +
+        String(dt.getMinutes()).padStart(2, '0');
+      c.font = '700 11px system-ui';
+      const ttw = c.measureText(ttxt).width;
+      const tx0 = Math.max(2, Math.min(W - ttw - 14, xc - ttw / 2 - 6));
+      c.fillStyle = '#8fa0bf'; c.fillRect(tx0, BOT, ttw + 12, 20);
+      c.fillStyle = '#0a0e14';
+      c.fillText(ttxt, tx0 + 6, BOT + 15);
+      const chg = k.c - k.o, chgp = k.o ? chg / k.o * 100 : 0;
+      const lines = [ttxt,
+        'O ' + k.o.toFixed(2) + '   H ' + k.h.toFixed(2),
+        'L ' + k.l.toFixed(2) + '   C ' + k.c.toFixed(2),
+        (up ? '▲ +' : '▼ −') + Math.abs(chg).toFixed(2) + ' (' +
+          (chgp >= 0 ? '+' : '') + chgp.toFixed(2) + '%)'];
+      c.font = '600 11px system-ui';
+      let bw2 = 0;
+      lines.forEach(t => { bw2 = Math.max(bw2, c.measureText(t).width); });
+      bw2 += 18;
+      const bh2 = lines.length * 15 + 14;
+      let bx = xc + 16, by = cy - bh2 - 10;
+      if (bx + bw2 > W - 2) bx = xc - 16 - bw2;
+      if (bx < 2) bx = 2;
+      if (by < 2) by = cy + 16;
+      if (by + bh2 > BOT - 2) by = BOT - bh2 - 2;
+      c.fillStyle = 'rgba(8,12,18,.9)';
+      c.strokeStyle = 'rgba(140,150,170,.4)'; c.lineWidth = 1;
+      c.beginPath();
+      if (c.roundRect) c.roundRect(bx, by, bw2, bh2, 6);
+      else c.rect(bx, by, bw2, bh2);
+      c.fill(); c.stroke();
+      c.textAlign = 'left'; c.textBaseline = 'top';
+      c.fillStyle = '#e8ecf4'; c.fillText(lines[0], bx + 9, by + 8);
+      c.fillStyle = '#aeb8cf';
+      c.fillText(lines[1], bx + 9, by + 8 + 15);
+      c.fillText(lines[2], bx + 9, by + 8 + 30);
+      c.fillStyle = kcol; c.font = '700 11px system-ui';
+      c.fillText(lines[3], bx + 9, by + 8 + 45);
+      c.restore();
     }
   } catch (e) { /* chart must never break engine/tally/alerts */ }
 }
